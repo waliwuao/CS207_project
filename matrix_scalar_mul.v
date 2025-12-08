@@ -43,9 +43,9 @@ module ScalarMultiplyUnit (
                 for (j = 0; j < 5; j = j + 1) begin
                     idx = (i*5 + j)*8;
                     if (i < m && j < n) begin
-                        scalarMul[idx +: 8] = matrixA[idx +: 8] * scalarValue;
+                        scalarMul[idx+7:idx] = matrixA[idx+7:idx] * scalarValue;
                     end else begin
-                        scalarMul[idx +: 8] = 8'd0;
+                        scalarMul[idx+7:idx] = 8'd0;
                     end
                 end
             end

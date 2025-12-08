@@ -62,11 +62,11 @@ module MatrixMultiplyUnit (
                             if (k < a_n) begin
                                 idx_a = (i*5 + k)*8;
                                 idx_b = (k*5 + j)*8;
-                                acc = acc + matrixA[idx_a +: 8] * matrixB[idx_b +: 8];
+                                acc = acc + matrixA[idx_a+7:idx_a] * matrixB[idx_b+7:idx_b];
                             end
                         end
                         idx_c = (i*5 + j)*16;
-                        aMulB[idx_c +: 16] = acc;
+                        aMulB[idx_c+15:idx_c] = acc;
                     end
                 end
             end

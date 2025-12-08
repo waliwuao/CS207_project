@@ -67,12 +67,12 @@ module ConvolutionUnit (
                                 if (ki < k_m && kj < k_n) begin
                                     idx_in = ((i + ki)*5 + (j + kj))*8;
                                     idx_k  = (ki*3 + kj)*8;
-                                    acc = acc + inputImage[idx_in +: 8] * kernelMatrix[idx_k +: 8];
+                                    acc = acc + inputImage[idx_in+7:idx_in] * kernelMatrix[idx_k+7:idx_k];
                                 end
                             end
                         end
                         idx_out = (i*5 + j)*16;
-                        convResult[idx_out +: 16] = acc;
+                        convResult[idx_out+15:idx_out] = acc;
                     end
                 end
             end

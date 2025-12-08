@@ -45,9 +45,9 @@ module AddUnit (
                 for (j = 0; j < 5; j = j + 1) begin
                     idx = (i*5 + j)*8;
                     if (i < m && j < n) begin
-                        aPlusB[idx +: 8] = matrixA[idx +: 8] + matrixB[idx +: 8];
+                        aPlusB[idx+7:idx] = matrixA[idx+7:idx] + matrixB[idx+7:idx];
                     end else begin
-                        aPlusB[idx +: 8] = 8'd0;
+                        aPlusB[idx+7:idx] = 8'd0;
                     end
                 end
             end

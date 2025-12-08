@@ -51,9 +51,9 @@ module TransposeUnit (
                     idx_in  = (i*5 + j)*8;
                     idx_out = (j*5 + i)*8;
                     if (i < m_in && j < n_in) begin
-                        matrixAT[idx_out +: 8] = matrixA[idx_in +: 8];
+                        matrixAT[idx_out+7:idx_out] = matrixA[idx_in+7:idx_in];
                     end else begin
-                        matrixAT[idx_out +: 8] = 8'd0;
+                        matrixAT[idx_out+7:idx_out] = 8'd0;
                     end
                 end
             end
