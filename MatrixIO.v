@@ -1,71 +1,96 @@
 module matrixIO (
-    input clk,       // Clock signal
-    input rst,       // Reset signal
-    input writeEnable,     // Write enable signal
-    input [7:0] dimX,  // X dimension of the matrix
-    input [7:0] dimY,  // Y dimension of the matrix
-    input [24*8-1:0] writeData,  // Data to write to the matrix
-    output reg [2*25*8-1:0] readData,  // Data read from the matrix
-    output reg [1:0] fillState  // State of the matrix fill
+    input clk,                   // Clock signal
+    input rst,                   // Reset signal
+    input writeEnable,           // Write enable signal
+    input [7:0] dimX,            // Matrix X dimension (1-5)
+    input [7:0] dimY,            // Matrix Y dimension (1-5)
+    input [25*8-1:0] writeData,  // Data to write (single matrix, 25 elements)
+    output reg [5*25*8-1:0] readData, // Flattened data of 5 matrices
+    output reg [2:0] fillState   // Fill state (number of matrices stored)
 );
 
-localparam MAX_SCALE = 25;  // Maximum scale of the matrix
-localparam MAX_MATRIX = 2;  // Maximum number of matrices
-localparam MAX_ELEM = 25;  // Maximum number of elements in each matrix
-localparam ELEM_WIDTH = 8;  // Width of each element in bits
+    // Parameter definition
+    localparam MAX_SCALE = 25;   // Total number of dimension combinations (5x5)
+    localparam MAX_MATRIX = 5;   // Maximum number of matrices stored for each dimension
+    localparam MAX_ELEM = 25;    // Maximum number of elements in each matrix
+    localparam ELEM_WIDTH = 8;   // Bit width of each element
 
-reg [ELEM_WIDTH-1:0] mem [0:MAX_SCALE-1] [0:MAX_MATRIX-1] [0:MAX_ELEM-1];  // Memory to store the matrix elements
-reg [4:0] scaleIdx;  // Index of the current scale
-reg [0:MAX_SCALE-1] scalePtr;  // Pointer to the current matrix in the current scale
-reg [1:0] scaleCnt [0:MAX_SCALE-1];  // Counter for the number of matrices filled in the current scale
+    // Internal memory
+    // mem[dimension index][matrix slot][element index]
+    reg [ELEM_WIDTH-1:0] mem [0:MAX_SCALE-1] [0:MAX_MATRIX-1] [0:MAX_ELEM-1];
 
-// FSM to handle matrix operations
-always @(posedge clk or posedge rst) begin
-    if(rst) begin  // Reset
-        integer i, j, k;
-        for(i=0; i<MAX_SCALE; i=i+1) begin
-            for(j=0; j<MAX_MATRIX; j=j+1) begin
-                for(k=0; k<MAX_ELEM; k=k+1) begin
-                    mem[i][j][k] <= 8'd0;
+    // Internal variables
+    reg [4:0] scaleIdx;          // Index of current dimension (0-24)
+    reg [2:0] scalePtr [0:MAX_SCALE-1]; 
+    reg [2:0] scaleCnt [0:MAX_SCALE-1]; 
+
+    // Auxiliary signal: Calculate the index of the combination logic for delay avoidance in sequential logic
+    wire [4:0] current_scale_idx;
+    wire valid_dim;
+
+    // Dimension validity judgment
+    assign valid_dim = (dimX >= 1 && dimX <= 5) && (dimY >= 1 && dimY <= 5);
+    // Index calculation: (Y-1)*5 + (X-1) mapped to 0-24
+    assign current_scale_idx = valid_dim ? ((dimY - 1)*5 + (dimX - 1)) : 5'd0;
+
+    // Main state machine logic
+    always @(posedge clk or posedge rst) begin
+        if(rst) begin
+            integer i, j, k;
+            // Reset logic
+            for(i=0; i<MAX_SCALE; i=i+1) begin
+                for(j=0; j<MAX_MATRIX; j=j+1) begin
+                    for(k=0; k<MAX_ELEM; k=k+1) begin
+                        mem[i][j][k] <= {ELEM_WIDTH{1'b0}};
+                    end
+                end
+                scalePtr[i] <= 3'd0; // Reset pointer
+                scaleCnt[i] <= 3'd0; // Reset counter
+            end
+            scaleIdx <= 5'd0;
+            readData <= {(MAX_MATRIX*MAX_ELEM*ELEM_WIDTH){1'b0}};
+            fillState <= 3'd0;
+        end else begin
+            // Update the index of the currently stored index for later use
+            scaleIdx <= current_scale_idx;
+
+            // --- Write logic ---
+            if(writeEnable && valid_dim) begin
+                integer elemIdx;
+                // 1. Write data to the matrix slot pointed to by the pointer
+                for(elemIdx=0; elemIdx<MAX_ELEM; elemIdx=elemIdx+1) begin
+                    mem[current_scale_idx][scalePtr[current_scale_idx]][elemIdx] <= 
+                        writeData[elemIdx*ELEM_WIDTH +: ELEM_WIDTH];
+                end
+
+                // 2. Update counter (saturate at MAX_MATRIX)
+                if(scaleCnt[current_scale_idx] < MAX_MATRIX) begin
+                    scaleCnt[current_scale_idx] <= scaleCnt[current_scale_idx] + 1'b1;
+                end
+
+                // 3. Update pointer (circular buffer: 0->1->2->3->4->0...)
+                if(scalePtr[current_scale_idx] == MAX_MATRIX - 1) begin
+                    scalePtr[current_scale_idx] <= 3'd0;
+                end else begin
+                    scalePtr[current_scale_idx] <= scalePtr[current_scale_idx] + 1'b1;
                 end
             end
-            scalePtr[i] <= 1'b0;
-            scaleCnt[i] <= 2'd0;
-        end
-        scaleIdx <= 5'd0;
-        readData <= {2*MAX_ELEM*ELEM_WIDTH{1'b0}};
-        fillState <= 2'b00;
-    end else begin
-        // Calculate the index of the current scale based on the X and Y dimensions
-        scaleIdx <= ((dimX >= 1 && dimX <=5) && (dimY >=1 && dimY <=5)) ? 
-                    ((dimY - 1)*5 + (dimX - 1)) : 5'd0;
-        // Write data to the matrix if the write enable signal is high and the dimensions are valid
-        if(writeEnable && (dimX >=1 && dimX <=5) && (dimY >=1 && dimY <=5)) begin
-            integer elemIdx;
-            for(elemIdx=0; elemIdx<MAX_ELEM; elemIdx=elemIdx+1) begin
-                mem[scaleIdx][scalePtr[scaleIdx]][elemIdx] <= writeData[elemIdx*ELEM_WIDTH +: ELEM_WIDTH];
+
+            // --- Read logic ---
+            // 3. Flatten the data of all 5 matrices
+            // Output format: [matrix4]...[matrix1][matrix0] (depending on bus convention, this is stored as matrix0)
+            integer mIdx, eIdx;
+            for(mIdx=0; mIdx < MAX_MATRIX; mIdx=mIdx+1) begin
+                for(eIdx=0; eIdx < MAX_ELEM; eIdx=eIdx+1) begin
+                    readData[(mIdx*MAX_ELEM*ELEM_WIDTH) + (eIdx*ELEM_WIDTH) +: ELEM_WIDTH] <= 
+                        mem[current_scale_idx][mIdx][eIdx];
+                end
             end
-            // Increment the counter if the number of matrices filled in the current scale is less than 2
-            if(scaleCnt[scaleIdx] < 2) begin
-                scaleCnt[scaleIdx] <= scaleCnt[scaleIdx] + 1'b1;
-            end
-            // Toggle the pointer to the current matrix in the current scale
-            scalePtr[scaleIdx] <= ~scalePtr[scaleIdx];
+
+            // --- State output ---
+            // Output the number of matrices filled in the current dimension (0 to 5)
+            fillState <= scaleCnt[current_scale_idx];
         end
-        // Read data from the matrix and update the output signals
-        integer rdIdx;
-        for(rdIdx=0; rdIdx<MAX_ELEM; rdIdx=rdIdx+1) begin
-            readData[rdIdx*ELEM_WIDTH +: ELEM_WIDTH] <= mem[scaleIdx][0][rdIdx];
-            readData[(MAX_ELEM + rdIdx)*ELEM_WIDTH +: ELEM_WIDTH] <= mem[scaleIdx][1][rdIdx];
-        end
-        // Update the fill state based on the number of matrices filled in the current scale
-        case(scaleCnt[scaleIdx])
-            2'd0: fillState <= 2'b00;
-            2'd1: fillState <= 2'b01;
-            2'd2: fillState <= 2'b10;
-            default: fillState <= 2'b00;
-        endcase
     end
-end
 
 endmodule
