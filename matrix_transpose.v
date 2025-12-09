@@ -25,19 +25,21 @@ module TransposeUnit (
     input             reset,
     input      [2:0]  m_in,
     input      [2:0]  n_in,
-    input      [199:0] matrixA,
+    input      [399:0] matrices_in,
     output reg [2:0]  m_out,
     output reg [2:0]  n_out,
-    output reg [199:0] matrixAT,
+    output reg [399:0] matrices_out,
     output reg         valid
 );
 
     integer i, j;
     integer idx_in;
     integer idx_out;
+    reg [199:0] matrixA;
 
     always @* begin
-        matrixAT = {200{1'b0}};
+        matrixA      = matrices_in[199:0];
+        matrices_out = {400{1'b0}};
         m_out    = 3'd0;
         n_out    = 3'd0;
         valid    = 1'b0;
@@ -51,9 +53,9 @@ module TransposeUnit (
                     idx_in  = (i*5 + j)*8;
                     idx_out = (j*5 + i)*8;
                     if (i < m_in && j < n_in) begin
-                        matrixAT[idx_out +: 8] = matrixA[idx_in +: 8];
+                        matrices_out[idx_out +: 8] = matrixA[idx_in +: 8];
                     end else begin
-                        matrixAT[idx_out +: 8] = 8'd0;
+                        matrices_out[idx_out +: 8] = 8'd0;
                     end
                 end
             end

@@ -26,15 +26,13 @@ module ConvolutionUnit (
     input      [2:0]  in_n,
     input      [1:0]  k_m,
     input      [1:0]  k_n,
-    input      [199:0] inputImage,
+    input      [399:0] matrices_in,
     input      [71:0]  kernelMatrix,
     output reg [2:0]  out_m,
     output reg [2:0]  out_n,
-    output reg [399:0] convResult,
+    output reg [399:0] matrices_out,
     output reg         valid,
-    output reg [9:0]   cycleCount,
-    output reg         done,
-    output reg         dim_error
+    output reg [9:0]   cycleCount
 );
 
     integer i, j, ki, kj;
@@ -42,19 +40,19 @@ module ConvolutionUnit (
     integer idx_k;
     integer idx_out;
     reg [15:0] acc;
+    reg [199:0] inputImage;
 
     always @* begin
-        convResult  = {400{1'b0}};
-        out_m     = 3'd0;
-        out_n     = 3'd0;
-        valid     = 1'b0;
-        dim_error = 1'b0;
-        cycleCount = 10'd0;
-        done       = 1'b0;
+        inputImage   = matrices_in[199:0];
+        matrices_out = {400{1'b0}};
+        out_m        = 3'd0;
+        out_n        = 3'd0;
+        valid        = 1'b0;
+        cycleCount   = 10'd0;
         if (in_m == 0 || in_n == 0 || k_m == 0 || k_n == 0 ||
             in_m > 5 || in_n > 5 || k_m > 3 || k_n > 3 ||
             in_m < k_m || in_n < k_n) begin
-            dim_error = 1'b1;
+            valid = 1'b0;
         end else begin
             out_m = in_m - k_m + 1;
             out_n = in_n - k_n + 1;
@@ -71,13 +69,13 @@ module ConvolutionUnit (
                                 end
                             end
                         end
-                        idx_out = (i*5 + j)*16;
-                        convResult[idx_out +: 16] = acc;
+                        idx_out = (i*5 + j)*8;
+                        // Truncate to 8-bit to comply with unified bus format
+                        matrices_out[idx_out +: 8] = acc[7:0];
                     end
                 end
             end
             valid = 1'b1;
-            done  = 1'b1;
         end
     end
 

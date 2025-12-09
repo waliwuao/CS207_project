@@ -25,8 +25,8 @@ module tb_matrix_scalar_mul;
     reg  [2:0] m;
     reg  [2:0] n;
     reg  [3:0] scalarValue;
-    reg  [199:0] matrixA;
-    wire [199:0] scalarMul;
+    reg  [399:0] matrices_in;
+    wire [399:0] matrices_out;
     wire valid;
 
     ScalarMultiplyUnit dut (
@@ -35,16 +35,16 @@ module tb_matrix_scalar_mul;
         .m(m), 
         .n(n), 
         .scalarValue(scalarValue), 
-        .matrixA(matrixA), 
-        .scalarMul(scalarMul), 
+        .matrices_in(matrices_in), 
+        .matrices_out(matrices_out), 
         .valid(valid)
     );
 
-    task automatic set_elem(inout reg [199:0] mat, input integer r, input integer c, input [7:0] val);
+    task automatic set_elem(inout reg [399:0] mat_pair, input integer mat_idx, input integer r, input integer c, input [7:0] val);
         integer idx;
         begin
-            idx = (r*5 + c)*8;
-            mat[idx +: 8] = val;
+            idx = (mat_idx*200) + (r*5 + c)*8;
+            mat_pair[idx +: 8] = val;
         end
     endtask
 
@@ -57,14 +57,14 @@ module tb_matrix_scalar_mul;
         n = 3'd3;
         scalarValue = 4'd3;
 
-        matrixA = {200{1'b0}};
+        matrices_in = {400{1'b0}};
 
-        set_elem(matrixA, 0, 0, 8'd1);
-        set_elem(matrixA, 0, 1, 8'd2);
-        set_elem(matrixA, 0, 2, 8'd3);
-        set_elem(matrixA, 1, 0, 8'd3);
-        set_elem(matrixA, 1, 1, 8'd4);
-        set_elem(matrixA, 1, 2, 8'd5);
+        set_elem(matrices_in, 0, 0, 0, 8'd1);
+        set_elem(matrices_in, 0, 0, 1, 8'd2);
+        set_elem(matrices_in, 0, 0, 2, 8'd3);
+        set_elem(matrices_in, 0, 1, 0, 8'd3);
+        set_elem(matrices_in, 0, 1, 1, 8'd4);
+        set_elem(matrices_in, 0, 1, 2, 8'd5);
 
         #10;
 
@@ -78,7 +78,7 @@ module tb_matrix_scalar_mul;
             for (i = 0; i < m; i = i + 1) begin
                 for (j = 0; j < n; j = j + 1) begin
                     idx = (i*5 + j)*8;
-                    $write("%4d ", scalarMul[idx +: 8]);
+                    $write("%4d ", matrices_out[idx +: 8]);
                 end
                 $display("");
             end

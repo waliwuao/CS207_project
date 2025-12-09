@@ -26,13 +26,11 @@ module MatrixMultiplyUnit (
     input      [2:0]  a_n,
     input      [2:0]  b_m,
     input      [2:0]  b_n,
-    input      [199:0] matrixA,
-    input      [199:0] matrixB,
+    input      [399:0] matrices_in,
     output reg [2:0]  c_m,
     output reg [2:0]  c_n,
-    output reg [399:0] aMulB,
-    output reg         valid,
-    output reg         mulError
+    output reg [399:0] matrices_out,
+    output reg         valid
 );
 
     integer i, j, k;
@@ -40,17 +38,20 @@ module MatrixMultiplyUnit (
     integer idx_b;
     integer idx_c;
     reg [15:0] acc;
+    reg [199:0] matrixA;
+    reg [199:0] matrixB;
 
     always @* begin
-        aMulB    = {400{1'b0}};
+        matrixA      = matrices_in[199:0];
+        matrixB      = matrices_in[399:200];
+        matrices_out = {400{1'b0}};
         c_m      = 3'd0;
         c_n      = 3'd0;
         valid    = 1'b0;
-        mulError = 1'b0;
         if (a_m == 0 || a_n == 0 || b_m == 0 || b_n == 0 ||
             a_m > 5 || a_n > 5 || b_m > 5 || b_n > 5 ||
             a_n != b_m) begin
-            mulError = 1'b1;
+            valid = 1'b0;
         end else begin
             c_m = a_m;
             c_n = b_n;
@@ -65,8 +66,9 @@ module MatrixMultiplyUnit (
                                 acc = acc + matrixA[idx_a +: 8] * matrixB[idx_b +: 8];
                             end
                         end
-                        idx_c = (i*5 + j)*16;
-                        aMulB[idx_c +: 16] = acc;
+                        idx_c = (i*5 + j)*8;
+                        // Truncate to 8-bit to match unified bus format
+                        matrices_out[idx_c +: 8] = acc[7:0];
                     end
                 end
             end

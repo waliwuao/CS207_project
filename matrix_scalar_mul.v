@@ -25,16 +25,18 @@ module ScalarMultiplyUnit (
     input      [2:0]  m,
     input      [2:0]  n,
     input      [3:0]  scalarValue,
-    input      [199:0] matrixA,
-    output reg [199:0] scalarMul,
+    input      [399:0] matrices_in,
+    output reg [399:0] matrices_out,
     output reg         valid
 );
 
     integer i, j;
     integer idx;
+    reg [199:0] matrixA;
 
     always @* begin
-        scalarMul = {200{1'b0}};
+        matrixA      = matrices_in[199:0];
+        matrices_out = {400{1'b0}};
         valid     = 1'b0;
         if (m == 0 || n == 0 || m > 5 || n > 5) begin
             valid = 1'b0;
@@ -43,9 +45,9 @@ module ScalarMultiplyUnit (
                 for (j = 0; j < 5; j = j + 1) begin
                     idx = (i*5 + j)*8;
                     if (i < m && j < n) begin
-                        scalarMul[idx +: 8] = matrixA[idx +: 8] * scalarValue;
+                        matrices_out[idx +: 8] = matrixA[idx +: 8] * scalarValue;
                     end else begin
-                        scalarMul[idx +: 8] = 8'd0;
+                        matrices_out[idx +: 8] = 8'd0;
                     end
                 end
             end
