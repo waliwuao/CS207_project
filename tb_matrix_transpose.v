@@ -25,22 +25,22 @@ module tb_matrix_transpose;
     reg  reset;
     reg  [2:0] m_in;
     reg  [2:0] n_in;
-    reg  [399:0] matrices_in;
+    reg  [199:0] matrix_in;
     wire [2:0] m_out;
     wire [2:0] n_out;
-    wire [399:0] matrices_out;
+    wire [199:0] matrix_out;
     wire valid;
 
     TransposeUnit dut (
-        .clk(clk), .reset(reset), .m_in(m_in), .n_in(n_in), .matrices_in(matrices_in), .m_out(m_out), .n_out(n_out), .matrices_out(matrices_out), .valid(valid)
+        .clk(clk), .reset(reset), .m_in(m_in), .n_in(n_in), .matrix_in(matrix_in), .m_out(m_out), .n_out(n_out), .matrix_out(matrix_out), .valid(valid)
     );
 
     // 仿照 tb_matrix_add：inout 便于逐项写入
-    task automatic set_elem(inout reg [399:0] mat_pair, input integer mat_idx, input integer r, input integer c, input [7:0] val);
+    task automatic set_elem(inout reg [199:0] mat, input integer r, input integer c, input [7:0] val);
         integer idx;
         begin
-            idx = (mat_idx*200) + (r*5 + c)*8;
-            mat_pair[idx +: 8] = val;
+            idx = (r*5 + c)*8;
+            mat[idx +: 8] = val;
         end
     endtask
 
@@ -53,11 +53,11 @@ module tb_matrix_transpose;
         n_in = 3'd3;
 
         // 清零矩阵
-        matrices_in = {400{1'b0}};
+        matrix_in = {200{1'b0}};
 
-        set_elem(matrices_in, 0, 0, 0, 8'd1);
-        set_elem(matrices_in, 0, 0, 1, 8'd2);
-        set_elem(matrices_in, 0, 0, 2, 8'd3);
+        set_elem(matrix_in, 0, 0, 8'd1);
+        set_elem(matrix_in, 0, 1, 8'd2);
+        set_elem(matrix_in, 0, 2, 8'd3);
 
         #10;
 
@@ -72,7 +72,7 @@ module tb_matrix_transpose;
             for (i = 0; i < m_out; i = i + 1) begin
                 for (j = 0; j < n_out; j = j + 1) begin
                     idx = (i*5 + j)*8;
-                    $write("%4d ", matrices_out[idx +: 8]);
+                    $write("%4d ", matrix_out[idx +: 8]);
                 end
                 $display("");
             end
