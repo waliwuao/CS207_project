@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 module top #(
-    parameter integer CLK_FREQ_HZ = 50_000_000,
+    parameter integer CLK_FREQ_HZ = 100_000_000,
     parameter integer BLINK_HZ    = 4
 )(
     input  wire       clk,
@@ -10,7 +10,8 @@ module top #(
     input  wire [4:0] mode_sw,
     output wire [7:0] mode_led,
     output wire [6:0] seg,
-    output wire [3:0] an
+    output wire [3:0] an,
+    output wire       uart_tx
 );
 
     localparam MODE_DEFAULT = 3'd0;
@@ -49,7 +50,7 @@ module top #(
         .key_flag(btn_pulse)
     );
 
-    // Error blink module (外部模块，保持原样实例化)
+    // Error blink module (锟解部模锟介，锟斤拷锟斤拷原锟斤拷实锟斤拷锟斤拷)
     error_blink #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BLINK_HZ(BLINK_HZ)
@@ -87,7 +88,7 @@ module top #(
         end
     end
 
-    // LED display module (外部模块，保持原样实例化)
+    // LED display module (锟解部模锟介，锟斤拷锟斤拷原锟斤拷实锟斤拷锟斤拷)
     led_display u_led (
         .mode_state(mode_state),
         .error_active(error_active),
@@ -103,6 +104,17 @@ module top #(
         .mode_state(mode_state),
         .seg(seg),
         .an(an)
+    );
+
+    // UART notifier: emits mode name on every mode entry (including DEFAULT)
+    ModeUartNotifier #(
+        .CLK_FREQ_HZ(CLK_FREQ_HZ)
+    ) u_mode_uart (
+        .clk(clk),
+        .rst_n(rst_n),
+        .mode_state(mode_state),
+        .uart_tx(uart_tx),
+        .busy()
     );
 
 endmodule
