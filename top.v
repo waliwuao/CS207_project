@@ -30,7 +30,7 @@ module top #(
     localparam integer MATRIX_DEPTH = 5;
     localparam integer TOTAL_WIDTH  = MATRIX_WIDTH * MATRIX_DEPTH;
 
-    // Constant concat helper (non-automatic to keep synthesis tools happy in localparam)
+    // Constant concat helper
     function [199:0] pack25;
         input [7:0] d0;  input [7:0] d1;  input [7:0] d2;  input [7:0] d3;  input [7:0] d4;
         input [7:0] d5;  input [7:0] d6;  input [7:0] d7;  input [7:0] d8;  input [7:0] d9;
@@ -44,7 +44,7 @@ module top #(
         end
     endfunction
 
-    // Hard-coded demo matrices so the SHOW flow has data before user stores any matrix.
+    // Hard-coded demo matrices
     localparam [199:0] MAT_2X2_A = pack25(
         8'd1, 8'd2, 8'd3, 8'd4, 8'd0,
         8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
@@ -131,7 +131,7 @@ module top #(
                     end
                 end
             end else begin
-                mode_state <= mode_state;
+                mode_state <= mode_state; // Stay in mode until reset
             end
         end
     end
@@ -180,7 +180,7 @@ module top #(
     endfunction
 
     // --------------------
-    // Matrix storage (simple demo store with hard-coded seed data)
+    // Matrix storage
     // --------------------
     reg               storage_we;
     reg [7:0]         storage_dimX;
@@ -188,6 +188,9 @@ module top #(
     reg [199:0]       storage_wdata;
     wire [TOTAL_WIDTH-1:0] storage_rdata;
     wire [2:0]        storage_count;
+
+    // SHOW controller signals needed for matrixIO
+    reg [7:0] req_m, req_n;
 
     matrixIO u_matrix_store (
         .clk(clk),
@@ -202,16 +205,6 @@ module top #(
 
     reg [3:0] init_step;
     reg       init_active;
-
-    // SHOW controller state & requests (declared early because storage uses req_*)
-    reg [2:0] show_state;
-    reg [7:0] req_m, req_n;
-    reg [2:0] show_cursor;
-    reg       show_send_pulse;
-    reg       prompt_start;
-    reg [1:0] prompt_sel;
-    reg       prompt_req;
-    reg [1:0] prompt_req_sel;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -232,7 +225,7 @@ module top #(
                         storage_we    <= 1'b1;
                         init_step     <= 4'd1;
                     end
-                    4'd1: init_step <= 4'd2; // gap cycle
+                    4'd1: init_step <= 4'd2;
                     4'd2: begin
                         storage_dimX  <= 8'd2;
                         storage_dimY  <= 8'd2;
@@ -240,7 +233,7 @@ module top #(
                         storage_we    <= 1'b1;
                         init_step     <= 4'd3;
                     end
-                    4'd3: init_step <= 4'd4; // gap cycle
+                    4'd3: init_step <= 4'd4;
                     4'd4: begin
                         storage_dimX  <= 8'd3;
                         storage_dimY  <= 8'd3;
@@ -253,7 +246,7 @@ module top #(
                     end
                 endcase
             end else begin
-                // Follow m (rows) as dimX and n (cols) as dimY to align with matrixIO indexing.
+                // Sync storage dimensions with SHOW mode requests
                 storage_dimX <= req_m;
                 storage_dimY <= req_n;
             end
@@ -261,24 +254,42 @@ module top #(
     end
 
     // --------------------
-    // SHOW controller: wait for two digits (m,n) then send all stored matrices of that size
+    // SHOW controller (Fixed Logic)
     // --------------------
-    localparam SHOW_IDLE     = 3'd0;
-    localparam SHOW_WAIT_M   = 3'd1;
-    localparam SHOW_WAIT_N   = 3'd2;
-    localparam SHOW_PREP     = 3'd3;
-    localparam SHOW_SEND_ARM = 3'd4;
-    localparam SHOW_SEND_WAIT= 3'd5;
+    localparam SHOW_IDLE      = 3'd0;
+    localparam SHOW_WAIT_M    = 3'd1;
+    localparam SHOW_WAIT_N    = 3'd2;
+    localparam SHOW_PREP      = 3'd3;
+    localparam SHOW_SEND_ARM  = 3'd4;
+    localparam SHOW_SEND_WAIT = 3'd5;
 
     localparam PROMPT_WAIT1   = 2'd0;
     localparam PROMPT_WAIT2   = 2'd1;
     localparam PROMPT_DISPLAY = 2'd2;
 
+    reg [2:0] show_state;
+    reg [2:0] show_cursor;
+    reg       show_send_pulse;
+    reg       prompt_start;
+    reg [1:0] prompt_sel;
+    reg       prompt_req;
+    reg [1:0] prompt_req_sel;
+    
+    // Timer to wait for storage lookup
+    reg [1:0] prep_timer;
+
     wire [7:0] rx_digit;
     wire       rx_digit_ok;
+    wire       rx_is_ignore;
 
-    assign rx_digit    = decode_digit(rx_data);
-    assign rx_digit_ok = (rx_digit >= 8'd1) && (rx_digit <= 8'd5);
+    // Detect UART busyness to avoid collision
+    wire show_tx_busy;  // Defined later
+    wire mode_uart_busy; // Defined later
+
+    assign rx_digit     = decode_digit(rx_data);
+    assign rx_digit_ok  = (rx_digit >= 8'd1) && (rx_digit <= 8'd5);
+    // Ignore CR (0D), LF (0A), Space (20)
+    assign rx_is_ignore = (rx_data == 8'h0D) || (rx_data == 8'h0A) || (rx_data == 8'h20);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -291,98 +302,121 @@ module top #(
             prompt_sel      <= PROMPT_WAIT1;
             prompt_req      <= 1'b0;
             prompt_req_sel  <= PROMPT_WAIT1;
+            prep_timer      <= 2'd0;
         end else begin
             show_send_pulse <= 1'b0;
             prompt_start    <= 1'b0;
-            case (show_state)
-                SHOW_IDLE: begin
-                    show_cursor <= 3'd0;
-                    if (mode_state == MODE_SHOW) begin
-                        prompt_req     <= 1'b1;
-                        prompt_req_sel <= PROMPT_WAIT1;
-                        show_state <= SHOW_WAIT_M;
-                    end
-                end
-                SHOW_WAIT_M: begin
-                    show_cursor <= 3'd0;
-                    if (mode_state != MODE_SHOW) begin
-                        prompt_req <= 1'b0;
-                        show_state <= SHOW_IDLE;
-                    end else if (rx_done) begin
-                        if (rx_digit_ok) begin
-                            req_m          <= rx_digit;
-                            prompt_req     <= 1'b1;
-                            prompt_req_sel <= PROMPT_WAIT2;
-                            show_state     <= SHOW_WAIT_N;
-                        end else begin
-                            prompt_req     <= 1'b1;
-                            prompt_req_sel <= PROMPT_WAIT1;
-                            show_state     <= SHOW_WAIT_M;
-                        end
-                    end
-                end
-                SHOW_WAIT_N: begin
-                    show_cursor <= 3'd0;
-                    if (mode_state != MODE_SHOW) begin
-                        prompt_req <= 1'b0;
-                        show_state <= SHOW_IDLE;
-                    end else if (rx_done) begin
-                        if (rx_digit_ok) begin
-                            req_n          <= rx_digit;
-                            prompt_req     <= 1'b1;
-                            prompt_req_sel <= PROMPT_DISPLAY;
-                            show_state     <= SHOW_PREP;
-                        end else begin
-                            prompt_req     <= 1'b1;
-                            prompt_req_sel <= PROMPT_WAIT2;
-                            show_state     <= SHOW_WAIT_N;
-                        end
-                    end
-                end
-                SHOW_PREP: begin
-                    // allow one cycle for storage_count/storage_rdata to update to new dim
-                    show_cursor <= 3'd0;
-                    if (mode_state != MODE_SHOW) begin
-                        show_state <= SHOW_IDLE;
-                    end else if (storage_count == 3'd0) begin
-                        show_state <= SHOW_WAIT_M; // no matrix of this size
-                    end else begin
-                        show_state <= SHOW_SEND_ARM;
-                    end
-                end
-                SHOW_SEND_ARM: begin
-                    if (mode_state != MODE_SHOW) begin
-                        show_state <= SHOW_IDLE;
-                    end else if (show_cursor >= storage_count) begin
-                        show_state <= SHOW_WAIT_M; // done
-                        prompt_req     <= 1'b1;
-                        prompt_req_sel <= PROMPT_WAIT1;
-                    end else if (!show_tx_busy && !prompt_req && !mode_uart_busy) begin
-                        // Wait for mode UART to be idle before arming SHOW transfer to avoid line contention
-                        show_send_pulse <= 1'b1;
-                        show_state      <= SHOW_SEND_WAIT;
-                    end
-                end
-                SHOW_SEND_WAIT: begin
-                    if (mode_state != MODE_SHOW) begin
-                        show_state <= SHOW_IDLE;
-                    end else if (!show_tx_busy) begin
-                        show_cursor <= show_cursor + 1'b1;
-                        if (show_cursor + 1'b1 < storage_count) begin
-                            show_state <= SHOW_SEND_ARM;
-                        end else begin
-                            show_state <= SHOW_WAIT_M; // all sent, wait for next query
-                        end
-                    end
-                end
-                default: show_state <= SHOW_IDLE;
-            endcase
 
+            // If we leave SHOW mode, cancel pending prompts
             if (mode_state != MODE_SHOW) begin
                 prompt_req <= 1'b0;
             end
 
-            // Launch pending prompt when UART is free (avoid clobbering the mode notifier "SHOW\n")
+            case (show_state)
+                SHOW_IDLE: begin
+                    show_cursor <= 3'd0;
+                    prep_timer  <= 2'd0;
+                    if (mode_state == MODE_SHOW) begin
+                        // Entry point: Request "Wait1"
+                        prompt_req     <= 1'b1;
+                        prompt_req_sel <= PROMPT_WAIT1;
+                        show_state     <= SHOW_WAIT_M;
+                    end
+                end
+
+                SHOW_WAIT_M: begin
+                    show_cursor <= 3'd0;
+                    if (mode_state != MODE_SHOW) begin
+                        show_state <= SHOW_IDLE;
+                    end else if (rx_done) begin
+                        if (rx_digit_ok) begin
+                            // Valid M -> Request "Wait2" -> Wait for N
+                            req_m          <= rx_digit;
+                            prompt_req     <= 1'b1;
+                            prompt_req_sel <= PROMPT_WAIT2;
+                            show_state     <= SHOW_WAIT_N;
+                        end else if (!rx_is_ignore) begin
+                            // Invalid input (and not newline) -> Re-send "Wait1"
+                            prompt_req     <= 1'b1;
+                            prompt_req_sel <= PROMPT_WAIT1;
+                            show_state     <= SHOW_WAIT_M;
+                        end
+                        // If rx_is_ignore, do nothing (stay in WAIT_M)
+                    end
+                end
+
+                SHOW_WAIT_N: begin
+                    show_cursor <= 3'd0;
+                    if (mode_state != MODE_SHOW) begin
+                        show_state <= SHOW_IDLE;
+                    end else if (rx_done) begin
+                        if (rx_digit_ok) begin
+                            // Valid N -> Request "Display" -> Prepare to send
+                            req_n          <= rx_digit;
+                            prompt_req     <= 1'b1;
+                            prompt_req_sel <= PROMPT_DISPLAY;
+                            show_state     <= SHOW_PREP;
+                            prep_timer     <= 2'd0;
+                        end else if (!rx_is_ignore) begin
+                            // Invalid input -> Re-send "Wait2"
+                            prompt_req     <= 1'b1;
+                            prompt_req_sel <= PROMPT_WAIT2;
+                            show_state     <= SHOW_WAIT_N;
+                        end
+                    end
+                end
+
+                SHOW_PREP: begin
+                    // Wait a few cycles for req_m/n to propagate to matrixIO
+                    // and for storage_count to settle.
+                    show_cursor <= 3'd0;
+                    if (mode_state != MODE_SHOW) begin
+                        show_state <= SHOW_IDLE;
+                    end else begin
+                        if (prep_timer < 2'd3) begin
+                            prep_timer <= prep_timer + 1'b1;
+                        end else begin
+                            if (storage_count == 3'd0) begin
+                                // No matrices found -> Restart with "Wait1"
+                                prompt_req     <= 1'b1;
+                                prompt_req_sel <= PROMPT_WAIT1;
+                                show_state     <= SHOW_WAIT_M;
+                            end else begin
+                                show_state <= SHOW_SEND_ARM;
+                            end
+                        end
+                    end
+                end
+
+                SHOW_SEND_ARM: begin
+                    if (mode_state != MODE_SHOW) begin
+                        show_state <= SHOW_IDLE;
+                    end else if (show_cursor >= storage_count) begin
+                        // Done sending all matrices -> Restart with "Wait1"
+                        prompt_req     <= 1'b1;
+                        prompt_req_sel <= PROMPT_WAIT1;
+                        show_state     <= SHOW_WAIT_M;
+                    end else if (!show_tx_busy && !prompt_req && !mode_uart_busy) begin
+                        // UART free, prompt done -> Trigger Matrix Send
+                        show_send_pulse <= 1'b1;
+                        show_state      <= SHOW_SEND_WAIT;
+                    end
+                end
+
+                SHOW_SEND_WAIT: begin
+                    if (mode_state != MODE_SHOW) begin
+                        show_state <= SHOW_IDLE;
+                    end else if (!show_tx_busy) begin
+                        // Matrix transmission finished
+                        show_cursor <= show_cursor + 1'b1;
+                        show_state  <= SHOW_SEND_ARM;
+                    end
+                end
+
+                default: show_state <= SHOW_IDLE;
+            endcase
+
+            // Dispatch prompt request when UART is clear
             if (!show_tx_busy && !mode_uart_busy && prompt_req && mode_state == MODE_SHOW) begin
                 prompt_sel   <= prompt_req_sel;
                 prompt_start <= 1'b1;
@@ -391,16 +425,18 @@ module top #(
         end
     end
 
+    // --------------------
+    // Output Multiplexing & TX modules
+    // --------------------
+
     wire [199:0] show_matrix_slice;
     assign show_matrix_slice = storage_rdata[(show_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
 
-    // SHOW path now splits: prompt strings via ShowUartTx, matrices via MatrixUartTx.
     wire prompt_uart_tx;
     wire prompt_uart_busy;
     wire matrix_uart_tx;
     reg  matrix_tx_busy;
 
-    wire show_tx_busy;
     assign show_tx_busy = prompt_uart_busy || matrix_tx_busy;
 
     ShowUartTx #(
@@ -429,10 +465,7 @@ module top #(
         .uartTx(matrix_uart_tx)
     );
 
-    // --------------------
-    // Mode notifier (kept for other modes) and UART mux
-    // --------------------
-    wire mode_uart_busy;
+    wire mode_uart_tx;
 
     ModeUartNotifier #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ)
@@ -444,10 +477,10 @@ module top #(
         .busy(mode_uart_busy)
     );
 
-    // Matrix UART busy detection: consider a frame done after sustained idle on TX line.
+    // Matrix Busy Detection Logic
     localparam integer SHOW_BAUD_RATE      = 115200;
     localparam integer SHOW_BIT_CYCLES     = CLK_FREQ_HZ / SHOW_BAUD_RATE;
-    localparam integer SHOW_IDLE_BIT_GUARD = 12; // >1 byte worth of idle to mark completion
+    localparam integer SHOW_IDLE_BIT_GUARD = 12;
     localparam integer SHOW_IDLE_CYCLES    = SHOW_BIT_CYCLES * SHOW_IDLE_BIT_GUARD;
 
     reg [31:0] matrix_idle_cnt;
@@ -460,14 +493,16 @@ module top #(
             matrix_tx_busy <= 1'b0;
             matrix_idle_cnt<= 32'd0;
         end else begin
-            // Arm busy when a matrix send is triggered
+            // Arm busy flag on pulse
             if (show_send_pulse && !matrix_tx_busy) begin
                 matrix_tx_busy <= 1'b1;
                 matrix_idle_cnt<= 32'd0;
             end
 
             if (matrix_tx_busy) begin
-                if (matrix_uart_tx) begin
+                if (matrix_uart_tx) begin // Active High idle implies we look for high
+                    // Wait, UART idle is HIGH. If TX is HIGH, we count. 
+                    // If TX is LOW (start bit/data 0), we reset.
                     if (matrix_idle_cnt < SHOW_IDLE_CYCLES) begin
                         matrix_idle_cnt <= matrix_idle_cnt + 1'b1;
                     end
@@ -485,10 +520,9 @@ module top #(
         end
     end
 
-    wire show_uart_active;
     wire show_uart_sel_prompt;
     assign show_uart_sel_prompt = prompt_uart_busy || prompt_start;
-    assign show_uart_active     = (mode_state == MODE_SHOW) && (show_tx_busy || prompt_start);
+    
     assign uart_tx = (mode_state == MODE_SHOW)
                    ? (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)
                    : mode_uart_tx;
