@@ -394,27 +394,39 @@ module top #(
     wire [199:0] show_matrix_slice;
     assign show_matrix_slice = storage_rdata[(show_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
 
-    wire show_uart_tx;
-    wire mode_uart_tx;
+    // SHOW path now splits: prompt strings via ShowUartTx, matrices via MatrixUartTx.
+    wire prompt_uart_tx;
+    wire prompt_uart_busy;
+    wire matrix_uart_tx;
+    reg  matrix_tx_busy;
+
     wire show_tx_busy;
+    assign show_tx_busy = prompt_uart_busy || matrix_tx_busy;
 
     ShowUartTx #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BAUD_RATE(115200)
-    ) u_show_tx (
+    ) u_show_prompt (
+        .clk(clk),
+        .uartTxRstN(rst_n),
+        .sendOne(1'b0),
+        .promptStart(prompt_start),
+        .promptSel(prompt_sel),
+        .uartTx(prompt_uart_tx),
+        .busy(prompt_uart_busy)
+    );
+
+    MatrixUartTx u_show_matrix (
         .clk(clk),
         .uartTxRstN(rst_n),
         .sendOne(show_send_pulse),
-        .promptStart(prompt_start),
-        .promptSel(prompt_sel),
         .matrixData(show_matrix_slice),
         .m(req_m),
         .n(req_n),
         .id({5'b0, show_cursor} + 8'd1),
         .ifID(1'b1),
         .ifNM(1'b1),
-        .uartTx(show_uart_tx),
-        .busy(show_tx_busy)
+        .uartTx(matrix_uart_tx)
     );
 
     // --------------------
@@ -432,8 +444,53 @@ module top #(
         .busy(mode_uart_busy)
     );
 
+    // Matrix UART busy detection: consider a frame done after sustained idle on TX line.
+    localparam integer SHOW_BAUD_RATE      = 115200;
+    localparam integer SHOW_BIT_CYCLES     = CLK_FREQ_HZ / SHOW_BAUD_RATE;
+    localparam integer SHOW_IDLE_BIT_GUARD = 12; // >1 byte worth of idle to mark completion
+    localparam integer SHOW_IDLE_CYCLES    = SHOW_BIT_CYCLES * SHOW_IDLE_BIT_GUARD;
+
+    reg [31:0] matrix_idle_cnt;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            matrix_tx_busy <= 1'b0;
+            matrix_idle_cnt<= 32'd0;
+        end else if (mode_state != MODE_SHOW) begin
+            matrix_tx_busy <= 1'b0;
+            matrix_idle_cnt<= 32'd0;
+        end else begin
+            // Arm busy when a matrix send is triggered
+            if (show_send_pulse && !matrix_tx_busy) begin
+                matrix_tx_busy <= 1'b1;
+                matrix_idle_cnt<= 32'd0;
+            end
+
+            if (matrix_tx_busy) begin
+                if (matrix_uart_tx) begin
+                    if (matrix_idle_cnt < SHOW_IDLE_CYCLES) begin
+                        matrix_idle_cnt <= matrix_idle_cnt + 1'b1;
+                    end
+                end else begin
+                    matrix_idle_cnt <= 32'd0;
+                end
+
+                if (matrix_idle_cnt >= SHOW_IDLE_CYCLES) begin
+                    matrix_tx_busy <= 1'b0;
+                    matrix_idle_cnt<= 32'd0;
+                end
+            end else begin
+                matrix_idle_cnt <= 32'd0;
+            end
+        end
+    end
+
     wire show_uart_active;
-    assign show_uart_active = (mode_state == MODE_SHOW) && (show_tx_busy || prompt_start);
-    assign uart_tx = show_uart_active ? show_uart_tx : mode_uart_tx;
+    wire show_uart_sel_prompt;
+    assign show_uart_sel_prompt = prompt_uart_busy || prompt_start;
+    assign show_uart_active     = (mode_state == MODE_SHOW) && (show_tx_busy || prompt_start);
+    assign uart_tx = (mode_state == MODE_SHOW)
+                   ? (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)
+                   : mode_uart_tx;
 
 endmodule
