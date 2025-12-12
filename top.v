@@ -357,7 +357,8 @@ module top #(
                         show_state <= SHOW_WAIT_M; // done
                         prompt_req     <= 1'b1;
                         prompt_req_sel <= PROMPT_WAIT1;
-                    end else if (!show_tx_busy && !prompt_req) begin
+                    end else if (!show_tx_busy && !prompt_req && !mode_uart_busy) begin
+                        // Wait for mode UART to be idle before arming SHOW transfer to avoid line contention
                         show_send_pulse <= 1'b1;
                         show_state      <= SHOW_SEND_WAIT;
                     end
@@ -397,7 +398,10 @@ module top #(
     wire mode_uart_tx;
     wire show_tx_busy;
 
-    MatrixUartTx u_show_tx (
+    ShowUartTx #(
+        .CLK_FREQ_HZ(CLK_FREQ_HZ),
+        .BAUD_RATE(115200)
+    ) u_show_tx (
         .clk(clk),
         .uartTxRstN(rst_n),
         .sendOne(show_send_pulse),
@@ -429,7 +433,7 @@ module top #(
     );
 
     wire show_uart_active;
-    assign show_uart_active = (mode_state == MODE_SHOW) && (show_tx_busy || show_send_pulse || prompt_start);
+    assign show_uart_active = (mode_state == MODE_SHOW) && (show_tx_busy || prompt_start);
     assign uart_tx = show_uart_active ? show_uart_tx : mode_uart_tx;
 
 endmodule
