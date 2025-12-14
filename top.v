@@ -63,45 +63,6 @@ module top #(
     localparam integer MATRIX_DEPTH = 5;
     localparam integer TOTAL_WIDTH  = MATRIX_WIDTH * MATRIX_DEPTH;
 
-    // Constant concat helper
-    function [199:0] pack25;
-        input [7:0] d0;  input [7:0] d1;  input [7:0] d2;  input [7:0] d3;  input [7:0] d4;
-        input [7:0] d5;  input [7:0] d6;  input [7:0] d7;  input [7:0] d8;  input [7:0] d9;
-        input [7:0] d10; input [7:0] d11; input [7:0] d12; input [7:0] d13; input [7:0] d14;
-        input [7:0] d15; input [7:0] d16; input [7:0] d17; input [7:0] d18; input [7:0] d19;
-        input [7:0] d20; input [7:0] d21; input [7:0] d22; input [7:0] d23; input [7:0] d24;
-        begin
-            pack25 = {d24,d23,d22,d21,d20,d19,d18,d17,d16,d15,
-                      d14,d13,d12,d11,d10,d9,d8,d7,d6,d5,
-                      d4,d3,d2,d1,d0};
-        end
-    endfunction
-
-    // Hard-coded demo matrices
-    localparam [199:0] MAT_2X2_A = pack25(
-        8'd1, 8'd2, 8'd3, 8'd4, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0
-    );
-
-    localparam [199:0] MAT_2X2_B = pack25(
-        8'd5, 8'd6, 8'd7, 8'd8, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0
-    );
-
-    localparam [199:0] MAT_3X3_A = pack25(
-        8'd1, 8'd2, 8'd3, 8'd4, 8'd5,
-        8'd6, 8'd7, 8'd8, 8'd9, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0,
-        8'd0, 8'd0, 8'd0, 8'd0, 8'd0
-    );
-
     // --------------------
     // Basic mode handling
     // --------------------
@@ -249,62 +210,17 @@ module top #(
         .fillState(storage_count)
     );
 
-    reg [3:0] init_step;
-    reg       init_active;
-    reg       storage_init_done;
-
-    initial begin
-        storage_init_done = 1'b0;
-    end
-
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            init_step    <= 4'd0;
-            // Do NOT restart storage init on user reset.
-            init_active  <= 1'b0;
             storage_we   <= 1'b0;
             storage_dimX <= 8'd1;
             storage_dimY <= 8'd1;
             storage_wdata<= {MATRIX_WIDTH{1'b0}};
         end else begin
             storage_we <= 1'b0;
-            // One-time demo preload after POR. This must only run once,
-            // otherwise generated/stored matrices would be overwritten.
-            if (!storage_rst && !storage_init_done) begin
-                init_active <= 1'b1;
-            end
 
-            if (init_active) begin
-                case (init_step)
-                    4'd0: begin
-                        storage_dimX  <= 8'd2;
-                        storage_dimY  <= 8'd2;
-                        storage_wdata <= MAT_2X2_A;
-                        storage_we    <= 1'b1;
-                        init_step     <= 4'd1;
-                    end
-                    4'd1: init_step <= 4'd2;
-                    4'd2: begin
-                        storage_dimX  <= 8'd2;
-                        storage_dimY  <= 8'd2;
-                        storage_wdata <= MAT_2X2_B;
-                        storage_we    <= 1'b1;
-                        init_step     <= 4'd3;
-                    end
-                    4'd3: init_step <= 4'd4;
-                    4'd4: begin
-                        storage_dimX  <= 8'd3;
-                        storage_dimY  <= 8'd3;
-                        storage_wdata <= MAT_3X3_A;
-                        storage_we    <= 1'b1;
-                        init_step     <= 4'd5;
-                    end
-                    default: begin
-                        init_active       <= 1'b0;
-                        storage_init_done <= 1'b1;
-                    end
-                endcase
-            end else begin
+            // During storage reset window, don't write.
+            if (!storage_rst) begin
                 // GEN write has priority; otherwise track dims for SHOW/GEN reads
                 if (gen_write_req) begin
                     storage_dimX  <= gen_write_dimX;
