@@ -70,6 +70,8 @@ module top #(
     wire        error_active;
     wire        blink_bit;
     wire        btn_pulse;
+    wire        error_pulse;
+    wire        mode_sw_valid_onehot;
 
     function automatic [2:0] sw_to_mode;
         input [4:0] v;
@@ -105,9 +107,16 @@ module top #(
         .btn_pulse(btn_pulse),
         .mode_sw(mode_sw),
         .mode_state(mode_state),
+        .error_pulse(error_pulse),
         .error_active(error_active),
         .blink_bit(blink_bit)
     );
+
+    assign mode_sw_valid_onehot = (mode_sw == 5'b00001) ||
+                                 (mode_sw == 5'b00010) ||
+                                 (mode_sw == 5'b00100) ||
+                                 (mode_sw == 5'b01000) ||
+                                 (mode_sw == 5'b10000);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -133,25 +142,35 @@ module top #(
     end
 
     // 请确保你有 led_display.v
+    wire alert_active;
+    wire alert_blink_bit;
     led_display u_led (
         .mode_state(mode_state),
         .error_active(error_active),
         .blink_bit(blink_bit),
+        .alert_active(alert_active),
+        .alert_blink_bit(alert_blink_bit),
         .mode_sw(mode_sw),
         .mode_led(mode_led)
     );
 
     // 请确保你有 seven_seg_display.v
+    wire       calc_countdown_en;
+    wire [4:0] calc_countdown_sec;
+    reg        calc_force_mode_pulse;
     seven_seg_display u_seg (
         .clk(clk),
         .rst_n(rst_n),
         .mode_state(mode_state),
+        .force_mode_pulse(calc_force_mode_pulse),
         .calc_op_pulse(calc_op_disp_pulse),
         .calc_op_char(calc_op_disp_char),
         .calc_op_hold(calc_op_hold),
         .calc_op_hold_char(calc_op_hold_char),
         .scalar_disp_en(calc_scalar_disp_en),
         .scalar_val(calc_scalar_val),
+        .countdown_en(calc_countdown_en),
+        .countdown_sec(calc_countdown_sec),
         .seg(seg),
         .an(an)
     );
@@ -646,9 +665,49 @@ module top #(
     reg       calc_matrix_tx_busy;
     reg [31:0] calc_matrix_idle_cnt;
 
+    // Two-operand dimension bookkeeping (for compatibility validation)
+    reg [7:0] calc_op1_m;
+    reg [7:0] calc_op1_n;
+    reg [7:0] calc_op2_m;
+    reg [7:0] calc_op2_n;
+
+    // Countdown + alert blink for invalid dimension combinations
+    reg        calc_countdown_en_r;
+    reg [4:0]  calc_countdown_sec_r;
+    reg [31:0] calc_countdown_cnt_r;
+    reg [31:0] alert_blink_cnt;
+    reg        alert_blink_bit_r;
+
+    assign calc_countdown_en  = calc_countdown_en_r;
+    assign calc_countdown_sec = calc_countdown_sec_r;
+    assign alert_active       = (mode_state == MODE_CALC) && calc_countdown_en_r;
+    assign alert_blink_bit    = alert_blink_bit_r;
+
+    localparam integer ALERT_BLINK_HALF_CYCLES = CLK_FREQ_HZ/(BLINK_HZ*2);
+    localparam integer ONE_SEC_CYCLES          = CLK_FREQ_HZ;
+
+    function automatic calc_dims_ok;
+        input [2:0] op;
+        input [7:0] m1;
+        input [7:0] n1;
+        input [7:0] m2;
+        input [7:0] n2;
+        begin
+            case (op)
+                CALC_OP_ADD: calc_dims_ok = (m1 == m2) && (n1 == n2);
+                CALC_OP_MUL: calc_dims_ok = (n1 == m2);
+                CALC_OP_CONV: calc_dims_ok = (m2 >= 8'd1) && (n2 >= 8'd1) &&
+                                             (m2 <= 8'd3) && (n2 <= 8'd3) &&
+                                             (m1 >= m2) && (n1 >= n2);
+                default: calc_dims_ok = 1'b1;
+            endcase
+        end
+    endfunction
+
     // Scalar input via switches
     wire [3:0] calc_scalar_val;
-    assign calc_scalar_val = mode_sw[3:0];
+    // Physical switch order is reversed for scalar entry: bit-reverse the 4 LSBs.
+    assign calc_scalar_val = {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
     reg        calc_scalar_disp_en;
 
     // Fake compute word TX ("calc\n")
@@ -862,6 +921,19 @@ module top #(
             calc_word_txStart  <= 1'b0;
             calc_word_txData   <= 8'h00;
             calc_prep_timer    <= 2'd0;
+
+            calc_op1_m <= 8'd1;
+            calc_op1_n <= 8'd1;
+            calc_op2_m <= 8'd1;
+            calc_op2_n <= 8'd1;
+
+            calc_countdown_en_r  <= 1'b0;
+            calc_countdown_sec_r <= 5'd0;
+            calc_countdown_cnt_r <= 32'd0;
+            alert_blink_cnt      <= 32'd0;
+            alert_blink_bit_r    <= 1'b0;
+
+            calc_force_mode_pulse <= 1'b0;
         end else begin
             calc_op_disp_pulse <= 1'b0;
             calc_op_tx_start   <= 1'b0;
@@ -871,6 +943,64 @@ module top #(
             calc_info_start    <= 1'b0;
             calc_word_txStart  <= 1'b0;
             calc_scalar_disp_en<= 1'b0;
+            calc_force_mode_pulse <= 1'b0;
+
+            // Alert blink generator (runs only while countdown is active)
+            if (mode_state != MODE_CALC) begin
+                alert_blink_cnt   <= 32'd0;
+                alert_blink_bit_r <= 1'b0;
+            end else if (calc_countdown_en_r) begin
+                if (alert_blink_cnt < ALERT_BLINK_HALF_CYCLES - 1) begin
+                    alert_blink_cnt <= alert_blink_cnt + 1'b1;
+                end else begin
+                    alert_blink_cnt   <= 32'd0;
+                    alert_blink_bit_r <= ~alert_blink_bit_r;
+                end
+            end else begin
+                alert_blink_cnt   <= 32'd0;
+                alert_blink_bit_r <= 1'b0;
+            end
+
+            // Countdown timer (10s -> 0s). If time runs out before the user confirms the first
+            // re-entry step, force returning to CAL op selection start (re-show "CAL" for 1s).
+            if (mode_state != MODE_CALC) begin
+                calc_countdown_en_r  <= 1'b0;
+                calc_countdown_sec_r <= 5'd0;
+                calc_countdown_cnt_r <= 32'd0;
+            end else if (calc_countdown_en_r) begin
+                if (calc_countdown_cnt_r < ONE_SEC_CYCLES - 1) begin
+                    calc_countdown_cnt_r <= calc_countdown_cnt_r + 1'b1;
+                end else begin
+                    calc_countdown_cnt_r <= 32'd0;
+                    if (calc_countdown_sec_r != 5'd0) begin
+                        calc_countdown_sec_r <= calc_countdown_sec_r - 1'b1;
+                    end else begin
+                        // timeout at 0
+                        calc_countdown_en_r  <= 1'b0;
+                        calc_countdown_cnt_r <= 32'd0;
+
+                        // Reset to CAL start (no op selected)
+                        calc_state          <= CALC_WAIT_OP;
+                        calc_selected_char  <= 8'h00;
+                        calc_op_tx_pending  <= 1'b0;
+                        calc_word_req       <= 1'b0;
+                        calc_word_active    <= 1'b0;
+                        calc_word_idx       <= 3'd0;
+                        calc_prompt_req     <= 1'b0;
+                        calc_info_req       <= 1'b0;
+                        calc_info_seen_busy <= 1'b0;
+                        calc_flow           <= CALC_FLOW_IDLE;
+                        calc_operand_idx    <= 1'b0;
+                        calc_m_ready        <= 1'b0;
+                        calc_n_ready        <= 1'b0;
+                        calc_id_ready       <= 1'b0;
+                        calc_prep_timer     <= 2'd0;
+
+                        // Re-show "CAL" for 1 second
+                        calc_force_mode_pulse <= 1'b1;
+                    end
+                end
+            end
 
             // If we leave CALC mode (currently only via reset), return to selection
             if (mode_state != MODE_CALC) begin
@@ -887,6 +1017,10 @@ module top #(
                 calc_word_active   <= 1'b0;
                 calc_word_idx      <= 3'd0;
                 calc_prep_timer    <= 2'd0;
+
+                calc_countdown_en_r  <= 1'b0;
+                calc_countdown_sec_r <= 5'd0;
+                calc_countdown_cnt_r <= 32'd0;
             end else begin
                 // In CALC mode, wait for user to choose an operation via switches and confirm via button
                 if (calc_state == CALC_WAIT_OP) begin
@@ -918,6 +1052,13 @@ module top #(
                             calc_id_ready    <= 1'b0;
                             calc_operand_idx <= 1'b0;
                             calc_prep_timer  <= 2'd0;
+                            calc_op1_m        <= 8'd1;
+                            calc_op1_n        <= 8'd1;
+                            calc_op2_m        <= 8'd1;
+                            calc_op2_n        <= 8'd1;
+                            calc_countdown_en_r  <= 1'b0;
+                            calc_countdown_sec_r <= 5'd0;
+                            calc_countdown_cnt_r <= 32'd0;
                             calc_need_second <= (sw_to_calc_op(mode_sw) == CALC_OP_ADD) ||
                                                (sw_to_calc_op(mode_sw) == CALC_OP_MUL) ||
                                                (sw_to_calc_op(mode_sw) == CALC_OP_CONV);
@@ -960,8 +1101,28 @@ module top #(
 
                         CALC_FLOW_WAIT1_CONFIRM: begin
                             // Keep showing wait1 state; confirm via button
+                            if (rx_done) begin
+                                if (rx_digit_ok) begin
+                                    calc_m_pending <= rx_digit;
+                                    calc_m_ready   <= 1'b1;
+                                end
+                            end
                             if (btn_pulse && calc_m_ready) begin
                                 calc_req_m       <= calc_m_pending;
+                                if (calc_operand_idx == 1'b0) begin
+                                    calc_op1_m <= calc_m_pending;
+                                end else begin
+                                    calc_op2_m <= calc_m_pending;
+                                end
+
+                                // During countdown window, the first confirm counts as "started re-entry".
+                                // Cancel the countdown immediately.
+                                if (calc_countdown_en_r) begin
+                                    calc_countdown_en_r  <= 1'b0;
+                                    calc_countdown_sec_r <= 5'd0;
+                                    calc_countdown_cnt_r <= 32'd0;
+                                end
+
                                 calc_m_ready     <= 1'b0;
                                 calc_prompt_req  <= 1'b1;
                                 calc_prompt_req_sel <= PROMPT_WAIT2;
@@ -980,13 +1141,55 @@ module top #(
                         end
 
                         CALC_FLOW_WAIT2_CONFIRM: begin
+                            if (rx_done) begin
+                                if (rx_digit_ok) begin
+                                    calc_n_pending <= rx_digit;
+                                    calc_n_ready   <= 1'b1;
+                                end
+                            end
                             if (btn_pulse && calc_n_ready) begin
                                 calc_req_n       <= calc_n_pending;
+                                if (calc_operand_idx == 1'b0) begin
+                                    calc_op1_n <= calc_n_pending;
+                                end else begin
+                                    calc_op2_n <= calc_n_pending;
+                                end
                                 calc_n_ready     <= 1'b0;
-                                calc_prompt_req  <= 1'b1;
-                                calc_prompt_req_sel <= PROMPT_DISPLAY;
-                                calc_flow        <= CALC_FLOW_PREP;
-                                calc_prep_timer  <= 2'd0;
+
+                                // For two-operand ops, after we have both dimensions, validate compatibility.
+                                // If invalid: start/restart 10s countdown, blink LEDs continuously,
+                                // and force returning to operand selection start (user can re-enter within countdown).
+                                if (calc_need_second && (calc_operand_idx == 1'b1)) begin
+                                    if (!calc_dims_ok(calc_state, calc_op1_m, calc_op1_n, calc_op2_m, calc_n_pending)) begin
+                                        calc_countdown_en_r  <= 1'b1;
+                                        calc_countdown_sec_r <= 5'd10;
+                                        calc_countdown_cnt_r <= 32'd0;
+
+                                        calc_operand_idx <= 1'b0;
+                                        calc_m_ready     <= 1'b0;
+                                        calc_n_ready     <= 1'b0;
+                                        calc_id_ready    <= 1'b0;
+                                        calc_prompt_req     <= 1'b1;
+                                        calc_prompt_req_sel <= PROMPT_WAIT1;
+                                        calc_flow        <= CALC_FLOW_WAIT1_INPUT;
+                                        calc_prep_timer  <= 2'd0;
+                                    end else begin
+                                        // Valid dims -> proceed
+                                        calc_prompt_req  <= 1'b1;
+                                        calc_prompt_req_sel <= PROMPT_DISPLAY;
+                                        calc_flow        <= CALC_FLOW_PREP;
+                                        calc_prep_timer  <= 2'd0;
+                                        calc_countdown_en_r  <= 1'b0;
+                                        calc_countdown_sec_r <= 5'd0;
+                                        calc_countdown_cnt_r <= 32'd0;
+                                    end
+                                end else begin
+                                    // Single-operand / first operand path
+                                    calc_prompt_req  <= 1'b1;
+                                    calc_prompt_req_sel <= PROMPT_DISPLAY;
+                                    calc_flow        <= CALC_FLOW_PREP;
+                                    calc_prep_timer  <= 2'd0;
+                                end
                             end
                         end
 
@@ -1040,6 +1243,12 @@ module top #(
                         end
 
                         CALC_FLOW_SEL_CONFIRM: begin
+                            if (rx_done) begin
+                                if (rx_digit_ok) begin
+                                    calc_id_pending <= rx_digit;
+                                    calc_id_ready   <= 1'b1;
+                                end
+                            end
                             if (btn_pulse && calc_id_ready) begin
                                 // Clamp to existing range; if invalid, stay
                                 if (calc_id_pending >= 8'd1 && calc_id_pending <= storage_count) begin
@@ -1086,8 +1295,10 @@ module top #(
                             // Live show scalar via 7-seg; confirm button to finalize.
                             calc_scalar_disp_en <= 1'b1;
                             if (btn_pulse) begin
-                                calc_flow     <= CALC_FLOW_SEND_CALC;
-                                calc_word_req <= 1'b1;
+                                if (calc_scalar_val <= 4'd9) begin
+                                    calc_flow     <= CALC_FLOW_SEND_CALC;
+                                    calc_word_req <= 1'b1;
+                                end
                             end
                         end
 
@@ -1498,6 +1709,54 @@ module top #(
             end
         end
     end
+
+    // --------------------
+    // Error pulse generation (drives LED blink via error_blink)
+    // --------------------
+    wire err_default_mode_sel;
+    wire err_show_dim;
+    wire err_calc_op_sel;
+    wire err_calc_uart_digit;
+    wire err_calc_id_range;
+    wire err_calc_scalar_range;
+    wire err_gen_digit;
+
+    // DEFAULT: invalid mode selection (not exactly one of the 5 mode switches).
+    assign err_default_mode_sel = (mode_state == MODE_DEFAULT) && btn_pulse && !mode_sw_valid_onehot;
+
+    // SHOW: invalid dimension input (non-ignored char, not in 1..5).
+    assign err_show_dim = (mode_state == MODE_SHOW) &&
+                          ((show_state == SHOW_WAIT_M) || (show_state == SHOW_WAIT_N)) &&
+                          rx_done && !rx_digit_ok && !rx_is_ignore;
+
+    // CALC: invalid op selection (only while waiting for op).
+    assign err_calc_op_sel = (mode_state == MODE_CALC) && (calc_state == CALC_WAIT_OP) &&
+                             btn_pulse && !mode_sw_valid_onehot;
+
+    // CALC: invalid UART digit during dimension / id entry (non-ignored, not 1..5).
+    assign err_calc_uart_digit = (mode_state == MODE_CALC) &&
+                                 ((calc_flow == CALC_FLOW_WAIT1_INPUT)   || (calc_flow == CALC_FLOW_WAIT1_CONFIRM) ||
+                                  (calc_flow == CALC_FLOW_WAIT2_INPUT)   || (calc_flow == CALC_FLOW_WAIT2_CONFIRM) ||
+                                  (calc_flow == CALC_FLOW_SEL_INPUT)     || (calc_flow == CALC_FLOW_SEL_CONFIRM)) &&
+                                 rx_done && !rx_digit_ok && !rx_is_ignore;
+
+    // CALC: invalid matrix id confirm (out of current storage_count range).
+    assign err_calc_id_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SEL_CONFIRM) &&
+                               btn_pulse && calc_id_ready &&
+                               !((calc_id_pending >= 8'd1) && (calc_id_pending <= storage_count));
+
+    // CALC: invalid scalar confirm (>9 shows 'E' on 7-seg; confirm should error but not accept).
+    assign err_calc_scalar_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SCALAR_WAIT) &&
+                                   btn_pulse && (calc_scalar_val > 4'd9);
+
+    // GEN: invalid UART digit during M/N/K entry.
+    assign err_gen_digit = (mode_state == MODE_GEN) &&
+                           ((gen_state == GEN_WAIT_M) || (gen_state == GEN_WAIT_N) || (gen_state == GEN_WAIT_K)) &&
+                           rx_done && !rx_is_ignore &&
+                           !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= 8'd5)) : rx_digit_ok);
+
+    assign error_pulse = err_default_mode_sel || err_show_dim || err_calc_op_sel ||
+                         err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit;
 
     // **********************************************
     // SHOW Matrix Busy Detection Logic

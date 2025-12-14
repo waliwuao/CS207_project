@@ -10,26 +10,16 @@ module error_blink #(
     input  wire       btn_pulse,
     input  wire [4:0] mode_sw,
     input  wire [2:0] mode_state,
+    input  wire       error_pulse,
     output reg        error_active,
     output reg        blink_bit
 );
-
-    localparam MODE_DEFAULT = 3'd0;
-    localparam MODE_CALC    = 3'd4;
 
     localparam integer ERROR_CYCLES      = CLK_FREQ_HZ;             // 1 second
     localparam integer BLINK_HALF_CYCLES = CLK_FREQ_HZ/(BLINK_HZ*2); // half period
 
     reg [31:0] error_counter;
     reg [31:0] blink_counter;
-
-    // True when exactly one bit is set.
-    function automatic is_one_hot;
-        input [4:0] v;
-        begin
-            is_one_hot = (v != 5'b0) && ((v & (v - 1'b1)) == 5'b0);
-        end
-    endfunction
 
     // Error control and blink timers.
     always @(posedge clk or negedge rst_n) begin
@@ -59,9 +49,8 @@ module error_blink #(
                 blink_counter <= 32'd0;
                 blink_bit     <= 1'b0;
 
-                // Trigger error if in DEFAULT mode (mode select) OR CALC mode (op select)
-                // and user presses button with an invalid switch value.
-                if ((mode_state == MODE_DEFAULT || mode_state == MODE_CALC) && btn_pulse && !is_one_hot(mode_sw)) begin
+                // Trigger error window only when explicitly requested by top-level logic.
+                if (error_pulse) begin
                     error_active <= 1'b1;
                 end
             end

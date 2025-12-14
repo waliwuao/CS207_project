@@ -4,12 +4,15 @@ module seven_seg_display (
     input  wire       clk,
     input  wire       rst_n,
     input  wire [2:0] mode_state,
+    input  wire       force_mode_pulse,
     input  wire       calc_op_pulse,
     input  wire [7:0] calc_op_char,
     input  wire       calc_op_hold,
     input  wire [7:0] calc_op_hold_char,
     input  wire       scalar_disp_en,
     input  wire [3:0] scalar_val,
+    input  wire       countdown_en,
+    input  wire [4:0] countdown_sec,
     output reg  [6:0] seg,
     output reg  [3:0] an
 );
@@ -36,9 +39,9 @@ module seven_seg_display (
     reg  [7:0] latched_calc_op_char;
 
     wire should_display;
-    assign should_display = display_active || (mode_state == MODE_CALC && calc_op_hold) || scalar_disp_en;
+    assign should_display = countdown_en || display_active || (mode_state == MODE_CALC && calc_op_hold) || scalar_disp_en;
 
-    // Detect mode change OR CALC op selection pulse
+    // Detect mode change OR forced mode pulse OR CALC op selection pulse
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             prev_mode_state       <= MODE_DEFAULT;
@@ -56,6 +59,11 @@ module seven_seg_display (
                 latched_is_calc_op   <= 1'b1;
                 latched_mode_state   <= MODE_CALC;
                 latched_calc_op_char <= calc_op_char;
+            end else if (force_mode_pulse) begin
+                display_active       <= 1'b1;
+                display_counter      <= 32'd0;
+                latched_is_calc_op   <= 1'b0;
+                latched_mode_state   <= mode_state;
             end else if (mode_state != MODE_DEFAULT && mode_state != prev_mode_state) begin
                 display_active     <= 1'b1;
                 display_counter    <= 32'd0;
@@ -134,17 +142,29 @@ module seven_seg_display (
         end
     endfunction
 
+    wire [3:0] countdown_tens;
+    wire [3:0] countdown_ones;
+    assign countdown_tens = (countdown_sec >= 5'd10) ? 4'd1 : 4'd0;
+    assign countdown_ones = (countdown_sec >= 5'd10) ? (countdown_sec - 5'd10) : countdown_sec[3:0];
+
     always @* begin
         // default off
         an  = 4'b0000;
         seg = 7'b0000000;
 
         if (should_display) begin
+            // Countdown overlay has highest priority
+            if (countdown_en) begin
+                case (mux_counter)
+                    2'd2: begin an = 4'b0100; seg = seg_for_hex(countdown_tens); end
+                    2'd3: begin an = 4'b1000; seg = seg_for_hex(countdown_ones); end
+                    default: begin an = 4'b0000; seg = 7'b0000000; end
+                endcase
             // Scalar live display during CALC scalar-entry: show op (digit0) + scalar (digit3)
-            if (!display_active && scalar_disp_en) begin
+            end else if (!display_active && scalar_disp_en) begin
                 case (mux_counter)
                     2'd0: begin an = 4'b0001; seg = seg_for_letter(calc_op_hold_char); end
-                    2'd3: begin an = 4'b1000; seg = seg_for_hex(scalar_val); end
+                    2'd3: begin an = 4'b1000; seg = seg_for_hex((scalar_val <= 4'h9) ? scalar_val : 4'hE); end
                     default: begin an = 4'b0000; seg = 7'b0000000; end
                 endcase
             // 1) During 1-second window, show latched

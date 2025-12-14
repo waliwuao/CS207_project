@@ -6,6 +6,8 @@ module led_display (
     input  wire [2:0] mode_state,
     input  wire       error_active,
     input  wire       blink_bit,
+    input  wire       alert_active,
+    input  wire       alert_blink_bit,
     input  wire [4:0] mode_sw,
     output reg  [7:0] mode_led
 );
@@ -19,7 +21,9 @@ module led_display (
 
     // LED behavior.
     always @* begin
-        if (error_active) begin
+        if (alert_active) begin
+            mode_led = alert_blink_bit ? 8'b11111111 : 8'b00000000; // continuous blink all eight LEDs
+        end else if (error_active) begin
             mode_led = blink_bit ? 8'b11111111 : 8'b00000000; // blink all eight LEDs together
         end else if (mode_state == MODE_DEFAULT) begin
             mode_led = {3'b000, mode_sw}; // follow switches on lower 5 LEDs
