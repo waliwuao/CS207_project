@@ -4,8 +4,8 @@ module matrixIO (
     input writeEnable,
     input [7:0] dimX,
     input [7:0] dimY,
-    input [25*8-1:0] writeData,      // µ¥¸ö¾ØÕóÊý¾Ý (200 bits)
-    output reg [5*25*8-1:0] readData,// 5¸ö¾ØÕó±âÆ½»¯Êý¾Ý (1000 bits)
+    input [25*8-1:0] writeData,      // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (200 bits)
+    output reg [5*25*8-1:0] readData,// 5ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (1000 bits)
     output reg [2:0] fillState
 );
 
@@ -41,7 +41,7 @@ module matrixIO (
 
     always @(posedge clk or posedge rst) begin
         if(rst) begin
-            // 1. ½ö¸´Î»¿ØÖÆÐÅºÅ£¬²»Òª¸´Î» mem Êý×é
+            // 1. ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ÅºÅ£ï¿½ï¿½ï¿½Òªï¿½ï¿½Î» mem ï¿½ï¿½ï¿½ï¿½
             for(i=0; i<MAX_SCALE; i=i+1) begin
                 scalePtr[i] <= 3'd0;
                 scaleCnt[i] <= 3'd0;
@@ -55,8 +55,8 @@ module matrixIO (
 
             // --- Write logic ---
             if(writeEnable && valid_dim) begin
-                // Ê¹ÓÃ Part-Select Óï·¨Ö±½Ó¸üÐÂ¿íÏòÁ¿ÖÐµÄÄ³Ò»¶Î
-                // mem[ÐÐ][¸ßÎ»:µÍÎ»] <= Êý¾Ý
+                // Ê¹ï¿½ï¿½ Part-Select ï¿½ï·¨Ö±ï¿½Ó¸ï¿½ï¿½Â¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ðµï¿½Ä³Ò»ï¿½ï¿½
+                // mem[ï¿½ï¿½][ï¿½ï¿½Î»:ï¿½ï¿½Î»] <= ï¿½ï¿½ï¿½ï¿½
                 mem[current_scale_idx][(scalePtr[current_scale_idx] * MATRIX_WIDTH) +: MATRIX_WIDTH] <= writeData;
 
                 // Update counter
@@ -73,9 +73,9 @@ module matrixIO (
             end
 
             // --- Read logic ---
-            // Ö±½Ó¶ÁÈ¡ÕûÐÐÊý¾Ý£¬ÎÞÐèÑ­»·Æ´½Ó
-            // ×¢Òâ£ºÕâÀï¶ÁÈ¡µÄÊÇÉÏÒ»¸öÖÜÆÚµÄ current_scale_idx »¹ÊÇµ±Ç°µÄ£¿
-            // ÄãµÄÔ­Âß¼­ÊÇÍ¬²½¶Á£¬ÕâÀï±£³ÖÒ»ÖÂ£¬Ö±½Ó¶Á³öµ±Ç°Ë÷ÒýÖ¸ÏòµÄÕûÐÐ
+            // Ö±ï¿½Ó¶ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý£ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½Æ´ï¿½ï¿½
+            // ×¢ï¿½â£ºï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½Úµï¿½ current_scale_idx ï¿½ï¿½ï¿½Çµï¿½Ç°ï¿½Ä£ï¿½
+            // ï¿½ï¿½ï¿½Ô­ï¿½ß¼ï¿½ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï±£ï¿½ï¿½Ò»ï¿½Â£ï¿½Ö±ï¿½Ó¶ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             readData <= mem[current_scale_idx];
 
             // --- State output ---

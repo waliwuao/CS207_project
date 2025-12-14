@@ -15,6 +15,7 @@ module error_blink #(
 );
 
     localparam MODE_DEFAULT = 3'd0;
+    localparam MODE_CALC    = 3'd4;
 
     localparam integer ERROR_CYCLES      = CLK_FREQ_HZ;             // 1 second
     localparam integer BLINK_HALF_CYCLES = CLK_FREQ_HZ/(BLINK_HZ*2); // half period
@@ -58,8 +59,9 @@ module error_blink #(
                 blink_counter <= 32'd0;
                 blink_bit     <= 1'b0;
 
-                // Trigger error if in default mode and invalid switch on button press
-                if (mode_state == MODE_DEFAULT && btn_pulse && !is_one_hot(mode_sw)) begin
+                // Trigger error if in DEFAULT mode (mode select) OR CALC mode (op select)
+                // and user presses button with an invalid switch value.
+                if ((mode_state == MODE_DEFAULT || mode_state == MODE_CALC) && btn_pulse && !is_one_hot(mode_sw)) begin
                     error_active <= 1'b1;
                 end
             end

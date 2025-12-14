@@ -19,12 +19,10 @@ module led_display (
 
     // LED behavior.
     always @* begin
-        if (mode_state == MODE_DEFAULT) begin
-            if (error_active) begin
-                mode_led = blink_bit ? 8'b11111111 : 8'b00000000; // blink all eight LEDs together
-            end else begin
-                mode_led = {3'b000, mode_sw}; // follow switches on lower 5 LEDs
-            end
+        if (error_active) begin
+            mode_led = blink_bit ? 8'b11111111 : 8'b00000000; // blink all eight LEDs together
+        end else if (mode_state == MODE_DEFAULT) begin
+            mode_led = {3'b000, mode_sw}; // follow switches on lower 5 LEDs
         end else begin
             case (mode_state)
                 MODE_STORE: mode_led = {3'b000, 5'b00001};
