@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-
 module ShowUartTx #(
     parameter integer CLK_FREQ_HZ = 100_000_000,
     parameter integer BAUD_RATE   = 115200
@@ -8,7 +6,7 @@ module ShowUartTx #(
     input             uartTxRstN,
     input             sendOne,      // kept for interface compatibility; ignored
     input             promptStart,
-    input  wire [1:0] promptSel,
+    input  wire [2:0] promptSel,
     output wire       uartTx,
     output wire       busy
 );
@@ -16,24 +14,30 @@ module ShowUartTx #(
     // -----------------------------
     // Prompt helpers (string only)
     // -----------------------------
-    localparam PROMPT_WAIT1   = 2'd0;
-    localparam PROMPT_WAIT2   = 2'd1;
-    localparam PROMPT_DISPLAY = 2'd2;
+    localparam PROMPT_WAIT1    = 3'd0;
+    localparam PROMPT_WAIT2    = 3'd1;
+    localparam PROMPT_WAIT3    = 3'd2;
+    localparam PROMPT_DISPLAY  = 3'd3;
+    localparam PROMPT_GENERATE = 3'd4;
+    localparam PROMPT_SHOW     = 3'd5;
 
     function automatic [3:0] prompt_len;
-        input [1:0] s;
+        input [2:0] s;
         begin
             case (s)
-                PROMPT_WAIT1:   prompt_len = 4'd6; // wait1\n
-                PROMPT_WAIT2:   prompt_len = 4'd6; // wait2\n
-                PROMPT_DISPLAY: prompt_len = 4'd8; // display\n
+                PROMPT_WAIT1:    prompt_len = 4'd6; // wait1\n
+                PROMPT_WAIT2:    prompt_len = 4'd6; // wait2\n
+                PROMPT_WAIT3:    prompt_len = 4'd6; // wait3\n
+                PROMPT_DISPLAY:  prompt_len = 4'd8; // display\n
+                PROMPT_GENERATE: prompt_len = 4'd9; // generate\n
+                PROMPT_SHOW:     prompt_len = 4'd5; // show\n
                 default:        prompt_len = 4'd1;
             endcase
         end
     endfunction
 
     function automatic [7:0] prompt_char;
-        input [1:0] s;
+        input [2:0] s;
         input [3:0] idx;
         begin
             case (s)
@@ -49,7 +53,26 @@ module ShowUartTx #(
                         3: prompt_char = "t"; 4: prompt_char = "2"; default: prompt_char = "\n";
                     endcase
                 end
-                default: begin 
+                PROMPT_WAIT3: begin
+                    case (idx)
+                        0: prompt_char = "w"; 1: prompt_char = "a"; 2: prompt_char = "i";
+                        3: prompt_char = "t"; 4: prompt_char = "3"; default: prompt_char = "\n";
+                    endcase
+                end
+                PROMPT_GENERATE: begin
+                    case (idx)
+                        0: prompt_char = "g"; 1: prompt_char = "e"; 2: prompt_char = "n";
+                        3: prompt_char = "e"; 4: prompt_char = "r"; 5: prompt_char = "a";
+                        6: prompt_char = "t"; 7: prompt_char = "e"; default: prompt_char = "\n";
+                    endcase
+                end
+                PROMPT_SHOW: begin
+                    case (idx)
+                        0: prompt_char = "s"; 1: prompt_char = "h"; 2: prompt_char = "o";
+                        3: prompt_char = "w"; default: prompt_char = "\n";
+                    endcase
+                end
+                default: begin // PROMPT_DISPLAY
                     case (idx)
                         0: prompt_char = "d"; 1: prompt_char = "i"; 2: prompt_char = "s";
                         3: prompt_char = "p"; 4: prompt_char = "l"; 5: prompt_char = "a";
@@ -82,6 +105,7 @@ module ShowUartTx #(
     reg [7:0] txData;
     wire      txBusy;
 
+    // 请确保你有 UartTx.v
     UartTx #(
         .CLK_FREQ(CLK_FREQ_HZ),
         .BAUD_RATE(BAUD_RATE)
@@ -103,7 +127,7 @@ module ShowUartTx #(
     localparam ST_WAIT = 2'd3;
 
     reg [1:0] state;
-    reg [1:0] active_prompt;
+    reg [2:0] active_prompt;
     reg [3:0] prompt_idx;
 
     assign busy = (state != ST_IDLE);

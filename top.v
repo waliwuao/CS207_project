@@ -16,6 +16,39 @@ module top #(
 );
 
     // --------------------
+    // Storage power-on reset (POR)
+    // --------------------
+    // User reset (rst_n) is used to return to DEFAULT mode in this project.
+    // To make stored/generated matrices survive that reset, matrixIO is only
+    // reset once after power-up/configuration.
+    reg        storage_por_done;
+    reg [15:0] storage_por_cnt;
+    wire       storage_rst;
+
+    // Synthesis-friendly initialization for FPGA; in simulation this also
+    // avoids X-propagation.
+    initial begin
+        storage_por_done = 1'b0;
+        storage_por_cnt  = 16'd0;
+    end
+
+    // Hold storage in reset for a short time after rst_n is released the first
+    // time. After that, never reset storage again.
+    always @(posedge clk) begin
+        if (!storage_por_done) begin
+            if (!rst_n) begin
+                storage_por_cnt <= 16'd0;
+            end else if (storage_por_cnt == 16'd1023) begin
+                storage_por_done <= 1'b1;
+            end else begin
+                storage_por_cnt <= storage_por_cnt + 1'b1;
+            end
+        end
+    end
+
+    assign storage_rst = ~storage_por_done;
+
+    // --------------------
     // Mode definitions
     // --------------------
     localparam MODE_DEFAULT = 3'd0;
@@ -91,6 +124,7 @@ module top #(
         end
     endfunction
 
+    // 请确保你有 debouncer.v
     debouncer #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_db (
@@ -100,6 +134,7 @@ module top #(
         .key_flag(btn_pulse)
     );
 
+    // 请确保你有 error_blink.v
     error_blink #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BLINK_HZ(BLINK_HZ)
@@ -136,6 +171,7 @@ module top #(
         end
     end
 
+    // 请确保你有 led_display.v
     led_display u_led (
         .mode_state(mode_state),
         .error_active(error_active),
@@ -144,6 +180,7 @@ module top #(
         .mode_led(mode_led)
     );
 
+    // 请确保你有 seven_seg_display.v
     seven_seg_display u_seg (
         .clk(clk),
         .rst_n(rst_n),
@@ -158,6 +195,7 @@ module top #(
     wire [7:0] rx_data;
     wire       rx_done;
 
+    // 请确保你有 UartRx.v
     UartRx #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_rx (
@@ -192,9 +230,17 @@ module top #(
     // SHOW controller signals needed for matrixIO
     reg [7:0] req_m, req_n;
 
+    // Forward declarations for GEN signals used in storage block
+    reg       gen_write_req;
+    reg [7:0] gen_write_dimX;
+    reg [7:0] gen_write_dimY;
+    reg [199:0] gen_write_wdata;
+    reg [7:0] gen_m, gen_n; 
+
+    // 请确保你有 matrixIO.v
     matrixIO u_matrix_store (
         .clk(clk),
-        .rst(~rst_n),
+        .rst(storage_rst),
         .writeEnable(storage_we),
         .dimX(storage_dimX),
         .dimY(storage_dimY),
@@ -205,17 +251,29 @@ module top #(
 
     reg [3:0] init_step;
     reg       init_active;
+    reg       storage_init_done;
+
+    initial begin
+        storage_init_done = 1'b0;
+    end
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             init_step    <= 4'd0;
-            init_active  <= 1'b1;
+            // Do NOT restart storage init on user reset.
+            init_active  <= 1'b0;
             storage_we   <= 1'b0;
             storage_dimX <= 8'd1;
             storage_dimY <= 8'd1;
             storage_wdata<= {MATRIX_WIDTH{1'b0}};
         end else begin
             storage_we <= 1'b0;
+            // One-time demo preload after POR. This must only run once,
+            // otherwise generated/stored matrices would be overwritten.
+            if (!storage_rst && !storage_init_done) begin
+                init_active <= 1'b1;
+            end
+
             if (init_active) begin
                 case (init_step)
                     4'd0: begin
@@ -242,13 +300,24 @@ module top #(
                         init_step     <= 4'd5;
                     end
                     default: begin
-                        init_active <= 1'b0;
+                        init_active       <= 1'b0;
+                        storage_init_done <= 1'b1;
                     end
                 endcase
             end else begin
-                // Sync storage dimensions with SHOW mode requests
-                storage_dimX <= req_m;
-                storage_dimY <= req_n;
+                // GEN write has priority; otherwise track dims for SHOW/GEN reads
+                if (gen_write_req) begin
+                    storage_dimX  <= gen_write_dimX;
+                    storage_dimY  <= gen_write_dimY;
+                    storage_wdata <= gen_write_wdata;
+                    storage_we    <= 1'b1;
+                end else if (mode_state == MODE_SHOW) begin
+                    storage_dimX <= req_m;
+                    storage_dimY <= req_n;
+                end else if (mode_state == MODE_GEN) begin
+                    storage_dimX <= gen_m;
+                    storage_dimY <= gen_n;
+                end
             end
         end
     end
@@ -256,24 +325,28 @@ module top #(
     // --------------------
     // SHOW controller (Fixed Logic)
     // --------------------
-    localparam SHOW_IDLE      = 3'd0;
-    localparam SHOW_WAIT_M    = 3'd1;
-    localparam SHOW_WAIT_N    = 3'd2;
-    localparam SHOW_PREP      = 3'd3;
-    localparam SHOW_SEND_ARM  = 3'd4;
-    localparam SHOW_SEND_WAIT = 3'd5;
+    localparam SHOW_IDLE        = 3'd0;
+    localparam SHOW_ENTRY_WAIT1 = 3'd1;
+    localparam SHOW_WAIT_M      = 3'd2;
+    localparam SHOW_WAIT_N      = 3'd3;
+    localparam SHOW_PREP        = 3'd4;
+    localparam SHOW_SEND_ARM    = 3'd5;
+    localparam SHOW_SEND_WAIT   = 3'd6;
 
-    localparam PROMPT_WAIT1   = 2'd0;
-    localparam PROMPT_WAIT2   = 2'd1;
-    localparam PROMPT_DISPLAY = 2'd2;
+    localparam PROMPT_WAIT1    = 3'd0;
+    localparam PROMPT_WAIT2    = 3'd1;
+    localparam PROMPT_WAIT3    = 3'd2;
+    localparam PROMPT_DISPLAY  = 3'd3;
+    localparam PROMPT_GENERATE = 3'd4;
+    localparam PROMPT_SHOW     = 3'd5;
 
     reg [2:0] show_state;
     reg [2:0] show_cursor;
     reg       show_send_pulse;
     reg       prompt_start;
-    reg [1:0] prompt_sel;
+    reg [2:0] prompt_sel;
     reg       prompt_req;
-    reg [1:0] prompt_req_sel;
+    reg [2:0] prompt_req_sel;
     
     // Timer to wait for storage lookup
     reg [1:0] prep_timer;
@@ -283,8 +356,8 @@ module top #(
     wire       rx_is_ignore;
 
     // Detect UART busyness to avoid collision
-    wire show_tx_busy;  // Defined later
-    wire mode_uart_busy; // Defined later
+    wire show_tx_busy;  
+    wire mode_uart_busy; 
 
     assign rx_digit     = decode_digit(rx_data);
     assign rx_digit_ok  = (rx_digit >= 8'd1) && (rx_digit <= 8'd5);
@@ -317,7 +390,18 @@ module top #(
                     show_cursor <= 3'd0;
                     prep_timer  <= 2'd0;
                     if (mode_state == MODE_SHOW) begin
-                        // Entry point: Request "Wait1"
+                        // Entry point: Request "show" then "wait1"
+                        prompt_req     <= 1'b1;
+                        prompt_req_sel <= PROMPT_SHOW;
+                        show_state     <= SHOW_ENTRY_WAIT1;
+                    end
+                end
+
+                SHOW_ENTRY_WAIT1: begin
+                    show_cursor <= 3'd0;
+                    if (mode_state != MODE_SHOW) begin
+                        show_state <= SHOW_IDLE;
+                    end else if (!prompt_req && !prompt_uart_busy) begin
                         prompt_req     <= 1'b1;
                         prompt_req_sel <= PROMPT_WAIT1;
                         show_state     <= SHOW_WAIT_M;
@@ -452,6 +536,7 @@ module top #(
         .busy(prompt_uart_busy)
     );
 
+    // 请确保你有 MatrixUartTx.v
     MatrixUartTx u_show_matrix (
         .clk(clk),
         .uartTxRstN(rst_n),
@@ -467,6 +552,7 @@ module top #(
 
     wire mode_uart_tx;
 
+    // 请确保你有 ModeUartNotifier.v
     ModeUartNotifier #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ)
     ) u_mode_uart (
@@ -477,7 +563,349 @@ module top #(
         .busy(mode_uart_busy)
     );
 
-    // Matrix Busy Detection Logic
+    // --------------------
+    // GEN controller (Random generation + store + UART output)
+    // --------------------
+    localparam GEN_IDLE          = 4'd0;
+    localparam GEN_ENTRY_WAIT1   = 4'd1;
+    localparam GEN_WAIT_M        = 4'd2;
+    localparam GEN_WAIT_N        = 4'd3;
+    localparam GEN_WAIT_K        = 4'd4;
+    localparam GEN_GEN_PULSE     = 4'd5;
+    localparam GEN_GEN_CAPTURE   = 4'd6;
+    localparam GEN_SEND_GENWORD  = 4'd7;
+    localparam GEN_SEND_ARM      = 4'd8;
+    localparam GEN_SEND_PULSE    = 4'd9;
+    localparam GEN_SEND_WAIT     = 4'd10;
+
+    reg [3:0] gen_state;
+    reg [7:0] gen_k;
+    reg [2:0] gen_gen_idx;
+    reg [2:0] gen_send_idx;
+
+    reg       gen_prompt_start;
+    reg [2:0] gen_prompt_sel;
+    reg       gen_prompt_req;
+    reg [2:0] gen_prompt_req_sel;
+
+    reg       gen_send_pulse;
+
+    // Random generator control
+    reg       rand_enable;
+    wire [199:0] rand_matrix;
+
+    // Buffer newly generated matrices (up to 5)
+    reg [199:0] gen_buf [0:4];
+
+    // GEN TX modules signals
+    wire gen_prompt_uart_tx;
+    wire gen_prompt_uart_busy;
+    wire gen_matrix_uart_tx;
+    reg  gen_matrix_tx_busy;
+    wire gen_tx_busy;
+
+    assign gen_tx_busy = gen_prompt_uart_busy || gen_matrix_tx_busy;
+
+    // 请确保你有 random.v
+    random u_rand (
+        .clk(clk),
+        .rst(~rst_n),
+        .genEnable(rand_enable),
+        .max_val(8'd9),
+        .readData(rand_matrix)
+    );
+
+    ShowUartTx #(
+        .CLK_FREQ_HZ(CLK_FREQ_HZ),
+        .BAUD_RATE(115200)
+    ) u_gen_prompt (
+        .clk(clk),
+        .uartTxRstN(rst_n),
+        .sendOne(1'b0),
+        .promptStart(gen_prompt_start),
+        .promptSel(gen_prompt_sel),
+        .uartTx(gen_prompt_uart_tx),
+        .busy(gen_prompt_uart_busy)
+    );
+
+    function automatic [199:0] sel_gen_buf;
+        input [2:0] idx;
+        begin
+            case (idx)
+                3'd0: sel_gen_buf = gen_buf[0];
+                3'd1: sel_gen_buf = gen_buf[1];
+                3'd2: sel_gen_buf = gen_buf[2];
+                3'd3: sel_gen_buf = gen_buf[3];
+                default: sel_gen_buf = gen_buf[4];
+            endcase
+        end
+    endfunction
+
+    wire [199:0] gen_matrix_to_send;
+    assign gen_matrix_to_send = sel_gen_buf(gen_send_idx);
+
+    // MatrixUartTx reads matrixData continuously while busy; keep its inputs
+    // stable for the entire transmission by latching before sendOne.
+    reg [199:0] gen_matrix_latched;
+    reg [7:0]   gen_m_latched;
+    reg [7:0]   gen_n_latched;
+    reg [7:0]   gen_id_latched;
+
+    MatrixUartTx u_gen_matrix (
+        .clk(clk),
+        .uartTxRstN(rst_n),
+        .sendOne(gen_send_pulse),
+        .matrixData(gen_matrix_latched),
+        .m(gen_m_latched),
+        .n(gen_n_latched),
+        .id(gen_id_latched),
+        .ifID(1'b1),
+        .ifNM(1'b1),
+        .uartTx(gen_matrix_uart_tx)
+    );
+
+    // **********************************************
+    // GEN Matrix Busy Detection Logic
+    // **********************************************
+    // 之前报错的地方：这里只保留一份逻辑定义
+    localparam integer GEN_BAUD_RATE      = 115200;
+    localparam integer GEN_BIT_CYCLES     = CLK_FREQ_HZ / GEN_BAUD_RATE;
+    localparam integer GEN_IDLE_BIT_GUARD = 12;
+    localparam integer GEN_IDLE_CYCLES    = GEN_BIT_CYCLES * GEN_IDLE_BIT_GUARD;
+    reg [31:0] gen_matrix_idle_cnt;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            gen_matrix_tx_busy  <= 1'b0;
+            gen_matrix_idle_cnt <= 32'd0;
+        end else if (mode_state != MODE_GEN) begin
+            gen_matrix_tx_busy  <= 1'b0;
+            gen_matrix_idle_cnt <= 32'd0;
+        end else begin
+            if (gen_send_pulse && !gen_matrix_tx_busy) begin
+                gen_matrix_tx_busy  <= 1'b1;
+                gen_matrix_idle_cnt <= 32'd0;
+            end
+
+            if (gen_matrix_tx_busy) begin
+                if (gen_matrix_uart_tx) begin
+                    if (gen_matrix_idle_cnt < GEN_IDLE_CYCLES) begin
+                        gen_matrix_idle_cnt <= gen_matrix_idle_cnt + 1'b1;
+                    end
+                end else begin
+                    gen_matrix_idle_cnt <= 32'd0;
+                end
+
+                if (gen_matrix_idle_cnt >= GEN_IDLE_CYCLES) begin
+                    gen_matrix_tx_busy  <= 1'b0;
+                    gen_matrix_idle_cnt <= 32'd0;
+                end
+            end else begin
+                gen_matrix_idle_cnt <= 32'd0;
+            end
+        end
+    end
+
+    // GEN controller FSM
+    integer gi;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            gen_state          <= GEN_IDLE;
+            gen_m              <= 8'd1;
+            gen_n              <= 8'd1;
+            gen_k              <= 8'd1;
+            gen_gen_idx        <= 3'd0;
+            gen_send_idx       <= 3'd0;
+            gen_send_pulse     <= 1'b0;
+            gen_prompt_start   <= 1'b0;
+            gen_prompt_sel     <= PROMPT_WAIT1;
+            gen_prompt_req     <= 1'b0;
+            gen_prompt_req_sel <= PROMPT_WAIT1;
+            rand_enable        <= 1'b0;
+            gen_write_req      <= 1'b0;
+            gen_write_dimX     <= 8'd1;
+            gen_write_dimY     <= 8'd1;
+            gen_write_wdata    <= {MATRIX_WIDTH{1'b0}};
+            for (gi = 0; gi < 5; gi = gi + 1) begin
+                gen_buf[gi] <= {MATRIX_WIDTH{1'b0}};
+            end
+            gen_matrix_latched <= {MATRIX_WIDTH{1'b0}};
+            gen_m_latched      <= 8'd1;
+            gen_n_latched      <= 8'd1;
+            gen_id_latched     <= 8'd1;
+        end else begin
+            gen_send_pulse   <= 1'b0;
+            gen_prompt_start <= 1'b0;
+            gen_write_req    <= 1'b0;
+            rand_enable      <= 1'b0;
+
+            // If we leave GEN mode, cancel pending prompt requests
+            if (mode_state != MODE_GEN) begin
+                gen_prompt_req <= 1'b0;
+            end
+
+            case (gen_state)
+                GEN_IDLE: begin
+                    if (mode_state == MODE_GEN) begin
+                        gen_prompt_req     <= 1'b1;
+                        gen_prompt_req_sel <= PROMPT_GENERATE;
+                        gen_state          <= GEN_ENTRY_WAIT1;
+                    end
+                end
+
+                GEN_ENTRY_WAIT1: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (!gen_prompt_req && !gen_prompt_uart_busy) begin
+                        gen_prompt_req     <= 1'b1;
+                        gen_prompt_req_sel <= PROMPT_WAIT1;
+                        gen_state          <= GEN_WAIT_M;
+                    end
+                end
+
+                GEN_WAIT_M: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (rx_done) begin
+                        if (rx_digit_ok) begin
+                            gen_m <= rx_digit;
+                            gen_prompt_req     <= 1'b1;
+                            gen_prompt_req_sel <= PROMPT_WAIT2;
+                            gen_state          <= GEN_WAIT_N;
+                        end else if (!rx_is_ignore) begin
+                            gen_prompt_req     <= 1'b1;
+                            gen_prompt_req_sel <= PROMPT_WAIT1;
+                            gen_state          <= GEN_WAIT_M;
+                        end
+                    end
+                end
+
+                GEN_WAIT_N: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (rx_done) begin
+                        if (rx_digit_ok) begin
+                            gen_n <= rx_digit;
+                            gen_prompt_req     <= 1'b1;
+                            gen_prompt_req_sel <= PROMPT_WAIT3;
+                            gen_state          <= GEN_WAIT_K;
+                        end else if (!rx_is_ignore) begin
+                            gen_prompt_req     <= 1'b1;
+                            gen_prompt_req_sel <= PROMPT_WAIT2;
+                            gen_state          <= GEN_WAIT_N;
+                        end
+                    end
+                end
+
+                GEN_WAIT_K: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (rx_done) begin
+                        if ((rx_digit >= 8'd1) && (rx_digit <= 8'd5)) begin
+                            gen_k       <= rx_digit;
+                            gen_gen_idx <= 3'd0;
+                            gen_send_idx<= 3'd0;
+                            gen_state   <= GEN_GEN_PULSE;
+                        end else if (!rx_is_ignore) begin
+                            gen_prompt_req     <= 1'b1;
+                            gen_prompt_req_sel <= PROMPT_WAIT3;
+                            gen_state          <= GEN_WAIT_K;
+                        end
+                    end
+                end
+
+                GEN_GEN_PULSE: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else begin
+                        rand_enable <= 1'b1;
+                        gen_state   <= GEN_GEN_CAPTURE;
+                    end
+                end
+
+                GEN_GEN_CAPTURE: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else begin
+                        gen_buf[gen_gen_idx] <= rand_matrix;
+
+                        // Also write to storage
+                        gen_write_req   <= 1'b1;
+                        gen_write_dimX  <= gen_m;
+                        gen_write_dimY  <= gen_n;
+                        gen_write_wdata <= rand_matrix;
+
+                        if (gen_gen_idx + 1'b1 < gen_k[2:0]) begin
+                            gen_gen_idx <= gen_gen_idx + 1'b1;
+                            gen_state   <= GEN_GEN_PULSE;
+                        end else begin
+                            // Finished generation; now send "generate" then matrices
+                            gen_prompt_req     <= 1'b1;
+                            gen_prompt_req_sel <= PROMPT_GENERATE;
+                            gen_state          <= GEN_SEND_GENWORD;
+                        end
+                    end
+                end
+
+                GEN_SEND_GENWORD: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (!gen_prompt_req && !gen_prompt_uart_busy) begin
+                        gen_send_idx <= 3'd0;
+                        gen_state    <= GEN_SEND_ARM;
+                    end
+                end
+
+                GEN_SEND_ARM: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (gen_send_idx >= gen_k[2:0]) begin
+                        // Done; restart for next input
+                        gen_prompt_req     <= 1'b1;
+                        gen_prompt_req_sel <= PROMPT_WAIT1;
+                        gen_state          <= GEN_WAIT_M;
+                    end else if (!gen_tx_busy && !gen_prompt_req && !mode_uart_busy) begin
+                        gen_matrix_latched <= sel_gen_buf(gen_send_idx);
+                        gen_m_latched      <= gen_m;
+                        gen_n_latched      <= gen_n;
+                        gen_id_latched     <= ({5'b0, gen_send_idx} + 8'd1);
+                        gen_state          <= GEN_SEND_PULSE;
+                    end
+                end
+
+                GEN_SEND_PULSE: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else begin
+                        gen_send_pulse <= 1'b1;
+                        gen_state      <= GEN_SEND_WAIT;
+                    end
+                end
+
+                GEN_SEND_WAIT: begin
+                    if (mode_state != MODE_GEN) begin
+                        gen_state <= GEN_IDLE;
+                    end else if (!gen_matrix_tx_busy) begin
+                        gen_send_idx <= gen_send_idx + 1'b1;
+                        gen_state    <= GEN_SEND_ARM;
+                    end
+                end
+
+                default: gen_state <= GEN_IDLE;
+            endcase
+
+            // Dispatch GEN prompt request when UART is clear
+            if (!gen_tx_busy && !mode_uart_busy && gen_prompt_req && mode_state == MODE_GEN) begin
+                gen_prompt_sel   <= gen_prompt_req_sel;
+                gen_prompt_start <= 1'b1;
+                gen_prompt_req   <= 1'b0;
+            end
+        end
+    end
+
+    // **********************************************
+    // SHOW Matrix Busy Detection Logic
+    // **********************************************
     localparam integer SHOW_BAUD_RATE      = 115200;
     localparam integer SHOW_BIT_CYCLES     = CLK_FREQ_HZ / SHOW_BAUD_RATE;
     localparam integer SHOW_IDLE_BIT_GUARD = 12;
@@ -500,9 +928,7 @@ module top #(
             end
 
             if (matrix_tx_busy) begin
-                if (matrix_uart_tx) begin // Active High idle implies we look for high
-                    // Wait, UART idle is HIGH. If TX is HIGH, we count. 
-                    // If TX is LOW (start bit/data 0), we reset.
+                if (matrix_uart_tx) begin 
                     if (matrix_idle_cnt < SHOW_IDLE_CYCLES) begin
                         matrix_idle_cnt <= matrix_idle_cnt + 1'b1;
                     end
@@ -523,8 +949,13 @@ module top #(
     wire show_uart_sel_prompt;
     assign show_uart_sel_prompt = prompt_uart_busy || prompt_start;
     
+    wire gen_uart_sel_prompt;
+    assign gen_uart_sel_prompt = gen_prompt_uart_busy || gen_prompt_start;
+
     assign uart_tx = (mode_state == MODE_SHOW)
                    ? (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)
+                   : (mode_state == MODE_GEN)
+                   ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx)
                    : mode_uart_tx;
 
 endmodule
