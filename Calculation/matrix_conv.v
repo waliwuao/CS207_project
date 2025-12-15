@@ -64,7 +64,8 @@ module ConvolutionUnit (
                         acc = 16'd0;
                         for (ki = 0; ki < 3; ki = ki + 1) begin
                             for (kj = 0; kj < 3; kj = kj + 1) begin
-                                if (ki < k_m && kj < k_n) begin
+                                // Guard with constant bounds so synthesis can prove part-selects stay in-range.
+                                if (ki < k_m && kj < k_n && (i + ki) < MAX_DIM && (j + kj) < MAX_DIM) begin
                                     idx_in = ((i + ki)*MAX_DIM + (j + kj))*ELEM_WIDTH;
                                     idx_k  = (ki*3 + kj)*ELEM_WIDTH;
                                     acc = acc + matrix_in[idx_in +: ELEM_WIDTH] * kernelMatrix[idx_k +: ELEM_WIDTH];

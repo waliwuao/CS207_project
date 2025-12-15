@@ -118,6 +118,9 @@ module top #(
                                  (mode_sw == 5'b01000) ||
                                  (mode_sw == 5'b10000);
 
+    // Allow CALC mode to return to DEFAULT by user confirmation (no global reset).
+    reg calc_exit_to_default;
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mode_state <= MODE_DEFAULT;
@@ -135,8 +138,10 @@ module top #(
                         mode_state <= MODE_DEFAULT;
                     end
                 end
+            end else if (mode_state == MODE_CALC && calc_exit_to_default) begin
+                mode_state <= MODE_DEFAULT;
             end else begin
-                mode_state <= mode_state; // Stay in mode until reset
+                mode_state <= mode_state; // Stay in mode until explicit exit/reset
             end
         end
     end
@@ -617,23 +622,26 @@ module top #(
     reg [2:0] calc_state;
 
     // CALC flow state machine (after op selected)
-    localparam CALC_FLOW_IDLE          = 4'd0;
-    localparam CALC_FLOW_SEND_INFO     = 4'd1;
-    localparam CALC_FLOW_WAIT1_INPUT   = 4'd2;
-    localparam CALC_FLOW_WAIT1_CONFIRM = 4'd3;
-    localparam CALC_FLOW_WAIT2_INPUT   = 4'd4;
-    localparam CALC_FLOW_WAIT2_CONFIRM = 4'd5;
-    localparam CALC_FLOW_PREP          = 4'd6;
-    localparam CALC_FLOW_LIST_ARM      = 4'd7;
-    localparam CALC_FLOW_LIST_WAIT     = 4'd8;
-    localparam CALC_FLOW_SEL_INPUT     = 4'd9;
-    localparam CALC_FLOW_SEL_CONFIRM   = 4'd10;
-    localparam CALC_FLOW_SHOW_ONE_ARM  = 4'd11;
-    localparam CALC_FLOW_SHOW_ONE_WAIT = 4'd12;
-    localparam CALC_FLOW_SCALAR_WAIT   = 4'd13;
-    localparam CALC_FLOW_SEND_CALC     = 4'd14;
+    localparam CALC_FLOW_IDLE              = 5'd0;
+    localparam CALC_FLOW_SEND_INFO         = 5'd1;
+    localparam CALC_FLOW_WAIT1_INPUT       = 5'd2;
+    localparam CALC_FLOW_WAIT1_CONFIRM     = 5'd3;
+    localparam CALC_FLOW_WAIT2_INPUT       = 5'd4;
+    localparam CALC_FLOW_WAIT2_CONFIRM     = 5'd5;
+    localparam CALC_FLOW_PREP              = 5'd6;
+    localparam CALC_FLOW_LIST_ARM          = 5'd7;
+    localparam CALC_FLOW_LIST_WAIT         = 5'd8;
+    localparam CALC_FLOW_SEL_INPUT         = 5'd9;
+    localparam CALC_FLOW_SEL_CONFIRM       = 5'd10;
+    localparam CALC_FLOW_SHOW_ONE_ARM      = 5'd11;
+    localparam CALC_FLOW_SHOW_ONE_WAIT     = 5'd12;
+    localparam CALC_FLOW_SCALAR_WAIT       = 5'd13;
+    localparam CALC_FLOW_COMPUTE_LATCH     = 5'd14;
+    localparam CALC_FLOW_RESULT_SEND_ARM   = 5'd15;
+    localparam CALC_FLOW_RESULT_SEND_WAIT  = 5'd16;
+    localparam CALC_FLOW_DONE_WAIT_CONFIRM = 5'd17;
 
-    reg [3:0] calc_flow;
+    reg [4:0] calc_flow;
 
     // Timer to wait for storage lookup after setting dims
     reg [1:0] calc_prep_timer;
@@ -670,6 +678,18 @@ module top #(
     reg [7:0] calc_op1_n;
     reg [7:0] calc_op2_m;
     reg [7:0] calc_op2_n;
+
+    // Operand matrix latching (tight packed, m*n elements)
+    reg [199:0] calc_op1_matrix_tight;
+    reg [199:0] calc_op2_matrix_tight;
+
+    // Result latching for UART output
+    reg [199:0] calc_result_matrix_tight;
+    reg [7:0]   calc_result_m;
+    reg [7:0]   calc_result_n;
+    reg         calc_result_send_pulse;
+    reg         calc_result_tx_busy;
+    reg [31:0]  calc_result_idle_cnt;
 
     // Countdown + alert blink for invalid dimension combinations
     reg        calc_countdown_en_r;
@@ -842,6 +862,278 @@ module top #(
         .uartTx(calc_matrix_uart_tx)
     );
 
+    // --------------------
+    // CALC computation (uses Calculation/ units)
+    // --------------------
+    function automatic [199:0] tight_to_padded_5x5;
+        input [199:0] tight;
+        input [2:0] m;
+        input [2:0] n;
+        integer r, c;
+        integer idx_t;
+        integer idx_p;
+        reg [199:0] out;
+        begin
+            out = {200{1'b0}};
+            if (m != 0 && n != 0) begin
+                for (r = 0; r < 5; r = r + 1) begin
+                    for (c = 0; c < 5; c = c + 1) begin
+                        idx_p = (r*5 + c) * 8;
+                        if (r < m && c < n) begin
+                            idx_t = (r*n + c) * 8;
+                            out[idx_p +: 8] = tight[idx_t +: 8];
+                        end else begin
+                            out[idx_p +: 8] = 8'd0;
+                        end
+                    end
+                end
+            end
+            tight_to_padded_5x5 = out;
+        end
+    endfunction
+
+    function automatic [199:0] padded_5x5_to_tight;
+        input [199:0] padded;
+        input [2:0] m;
+        input [2:0] n;
+        integer r, c;
+        integer idx_t;
+        integer idx_p;
+        reg [199:0] out;
+        begin
+            out = {200{1'b0}};
+            if (m != 0 && n != 0) begin
+                for (r = 0; r < 5; r = r + 1) begin
+                    for (c = 0; c < 5; c = c + 1) begin
+                        if (r < m && c < n) begin
+                            idx_t = (r*n + c) * 8;
+                            idx_p = (r*5 + c) * 8;
+                            out[idx_t +: 8] = padded[idx_p +: 8];
+                        end
+                    end
+                end
+            end
+            padded_5x5_to_tight = out;
+        end
+    endfunction
+
+    function automatic [71:0] padded_5x5_to_kernel3x3;
+        input [199:0] padded;
+        integer r, c;
+        integer idx_k;
+        integer idx_p;
+        reg [71:0] out;
+        begin
+            out = {72{1'b0}};
+            for (r = 0; r < 3; r = r + 1) begin
+                for (c = 0; c < 3; c = c + 1) begin
+                    idx_k = (r*3 + c) * 8;
+                    idx_p = (r*5 + c) * 8;
+                    out[idx_k +: 8] = padded[idx_p +: 8];
+                end
+            end
+            padded_5x5_to_kernel3x3 = out;
+        end
+    endfunction
+
+    wire [199:0] calc_op1_padded;
+    wire [199:0] calc_op2_padded;
+    assign calc_op1_padded = tight_to_padded_5x5(calc_op1_matrix_tight, calc_op1_m[2:0], calc_op1_n[2:0]);
+    assign calc_op2_padded = tight_to_padded_5x5(calc_op2_matrix_tight, calc_op2_m[2:0], calc_op2_n[2:0]);
+
+    // Add
+    wire [199:0] add_out_padded;
+    wire add_valid;
+    AddUnit u_add (
+        .clk(clk),
+        .reset(~rst_n),
+        .m(calc_op1_m[2:0]),
+        .n(calc_op1_n[2:0]),
+        .matrixA_in(calc_op1_padded),
+        .matrixB_in(calc_op2_padded),
+        .matrix_out(add_out_padded),
+        .valid(add_valid)
+    );
+
+    // Scalar multiply
+    wire [199:0] scalar_out_padded;
+    wire scalar_valid;
+    ScalarMultiplyUnit u_scalar (
+        .clk(clk),
+        .reset(~rst_n),
+        .m(calc_op1_m[2:0]),
+        .n(calc_op1_n[2:0]),
+        .scalarValue(calc_scalar_val),
+        .matrix_in(calc_op1_padded),
+        .matrix_out(scalar_out_padded),
+        .valid(scalar_valid)
+    );
+
+    // Transpose
+    wire [199:0] trans_out_padded;
+    wire [2:0]   trans_m;
+    wire [2:0]   trans_n;
+    wire trans_valid;
+    TransposeUnit u_transpose (
+        .clk(clk),
+        .reset(~rst_n),
+        .m_in(calc_op1_m[2:0]),
+        .n_in(calc_op1_n[2:0]),
+        .matrix_in(calc_op1_padded),
+        .m_out(trans_m),
+        .n_out(trans_n),
+        .matrix_out(trans_out_padded),
+        .valid(trans_valid)
+    );
+
+    // Multiply
+    wire [199:0] mul_out_padded;
+    wire [2:0]   mul_m;
+    wire [2:0]   mul_n;
+    wire mul_valid;
+    MatrixMultiplyUnit u_mul (
+        .clk(clk),
+        .reset(~rst_n),
+        .a_m(calc_op1_m[2:0]),
+        .a_n(calc_op1_n[2:0]),
+        .b_m(calc_op2_m[2:0]),
+        .b_n(calc_op2_n[2:0]),
+        .matrixA_in(calc_op1_padded),
+        .matrixB_in(calc_op2_padded),
+        .c_m(mul_m),
+        .c_n(mul_n),
+        .matrix_out(mul_out_padded),
+        .valid(mul_valid)
+    );
+
+    // Convolution
+    wire [71:0]  conv_kernel;
+    assign conv_kernel = padded_5x5_to_kernel3x3(calc_op2_padded);
+    wire [199:0] conv_out_padded;
+    wire [2:0]   conv_m;
+    wire [2:0]   conv_n;
+    wire conv_valid;
+    wire [9:0] conv_cycles;
+    ConvolutionUnit u_conv (
+        .clk(clk),
+        .reset(~rst_n),
+        .in_m(calc_op1_m[2:0]),
+        .in_n(calc_op1_n[2:0]),
+        .k_m(calc_op2_m[1:0]),
+        .k_n(calc_op2_n[1:0]),
+        .matrix_in(calc_op1_padded),
+        .kernelMatrix(conv_kernel),
+        .out_m(conv_m),
+        .out_n(conv_n),
+        .matrix_out(conv_out_padded),
+        .valid(conv_valid),
+        .cycleCount(conv_cycles)
+    );
+
+    // Selected result (padded 5x5) + dims
+    reg [199:0] calc_res_padded;
+    reg [2:0]   calc_res_m;
+    reg [2:0]   calc_res_n;
+    reg         calc_res_valid;
+
+    always @* begin
+        calc_res_padded = {200{1'b0}};
+        calc_res_m      = 3'd0;
+        calc_res_n      = 3'd0;
+        calc_res_valid  = 1'b0;
+        case (calc_state)
+            CALC_OP_ADD: begin
+                calc_res_padded = add_out_padded;
+                calc_res_m      = calc_op1_m[2:0];
+                calc_res_n      = calc_op1_n[2:0];
+                calc_res_valid  = add_valid;
+            end
+            CALC_OP_SCALAR: begin
+                calc_res_padded = scalar_out_padded;
+                calc_res_m      = calc_op1_m[2:0];
+                calc_res_n      = calc_op1_n[2:0];
+                calc_res_valid  = scalar_valid;
+            end
+            CALC_OP_TRANSPOSE: begin
+                calc_res_padded = trans_out_padded;
+                calc_res_m      = trans_m;
+                calc_res_n      = trans_n;
+                calc_res_valid  = trans_valid;
+            end
+            CALC_OP_MUL: begin
+                calc_res_padded = mul_out_padded;
+                calc_res_m      = mul_m;
+                calc_res_n      = mul_n;
+                calc_res_valid  = mul_valid;
+            end
+            CALC_OP_CONV: begin
+                calc_res_padded = conv_out_padded;
+                calc_res_m      = conv_m;
+                calc_res_n      = conv_n;
+                calc_res_valid  = conv_valid;
+            end
+            default: begin
+                calc_res_padded = {200{1'b0}};
+                calc_res_m      = 3'd0;
+                calc_res_n      = 3'd0;
+                calc_res_valid  = 1'b0;
+            end
+        endcase
+    end
+
+    // CALC result matrix TX
+    wire calc_result_uart_tx;
+    MatrixUartTx u_calc_result_matrix (
+        .clk(clk),
+        .uartTxRstN(rst_n),
+        .sendOne(calc_result_send_pulse),
+        .matrixData(calc_result_matrix_tight),
+        .m(calc_result_m),
+        .n(calc_result_n),
+        .id(8'd0),
+        .ifID(1'b0),
+        .ifNM(1'b1),
+        .uartTx(calc_result_uart_tx)
+    );
+
+    // Busy detection for result matrix TX
+    localparam integer CALC_RES_BAUD_RATE      = 115200;
+    localparam integer CALC_RES_BIT_CYCLES     = CLK_FREQ_HZ / CALC_RES_BAUD_RATE;
+    localparam integer CALC_RES_IDLE_BIT_GUARD = 12;
+    localparam integer CALC_RES_IDLE_CYCLES    = CALC_RES_BIT_CYCLES * CALC_RES_IDLE_BIT_GUARD;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            calc_result_tx_busy  <= 1'b0;
+            calc_result_idle_cnt <= 32'd0;
+        end else if (mode_state != MODE_CALC) begin
+            calc_result_tx_busy  <= 1'b0;
+            calc_result_idle_cnt <= 32'd0;
+        end else begin
+            if (calc_result_send_pulse && !calc_result_tx_busy) begin
+                calc_result_tx_busy  <= 1'b1;
+                calc_result_idle_cnt <= 32'd0;
+            end
+
+            if (calc_result_tx_busy) begin
+                if (calc_result_uart_tx) begin
+                    if (calc_result_idle_cnt < CALC_RES_IDLE_CYCLES) begin
+                        calc_result_idle_cnt <= calc_result_idle_cnt + 1'b1;
+                    end
+                end else begin
+                    calc_result_idle_cnt <= 32'd0;
+                end
+
+                if (calc_result_idle_cnt >= CALC_RES_IDLE_CYCLES) begin
+                    calc_result_tx_busy  <= 1'b0;
+                    calc_result_idle_cnt <= 32'd0;
+                end
+            end else begin
+                calc_result_idle_cnt <= 32'd0;
+            end
+        end
+    end
+
     // CALC matrix busy detection (same heuristic as SHOW)
     localparam integer CALC_BAUD_RATE      = 115200;
     localparam integer CALC_BIT_CYCLES     = CLK_FREQ_HZ / CALC_BAUD_RATE;
@@ -927,6 +1219,14 @@ module top #(
             calc_op2_m <= 8'd1;
             calc_op2_n <= 8'd1;
 
+            calc_op1_matrix_tight <= {MATRIX_WIDTH{1'b0}};
+            calc_op2_matrix_tight <= {MATRIX_WIDTH{1'b0}};
+            calc_result_matrix_tight <= {MATRIX_WIDTH{1'b0}};
+            calc_result_m <= 8'd1;
+            calc_result_n <= 8'd1;
+            calc_result_send_pulse <= 1'b0;
+            calc_exit_to_default <= 1'b0;
+
             calc_countdown_en_r  <= 1'b0;
             calc_countdown_sec_r <= 5'd0;
             calc_countdown_cnt_r <= 32'd0;
@@ -944,6 +1244,7 @@ module top #(
             calc_word_txStart  <= 1'b0;
             calc_scalar_disp_en<= 1'b0;
             calc_force_mode_pulse <= 1'b0;
+            calc_result_send_pulse <= 1'b0;
 
             // Alert blink generator (runs only while countdown is active)
             if (mode_state != MODE_CALC) begin
@@ -1021,7 +1322,14 @@ module top #(
                 calc_countdown_en_r  <= 1'b0;
                 calc_countdown_sec_r <= 5'd0;
                 calc_countdown_cnt_r <= 32'd0;
+
+                calc_exit_to_default <= 1'b0;
             end else begin
+                // Default: keep exit request until mode_state consumes it.
+                if (mode_state == MODE_DEFAULT) begin
+                    calc_exit_to_default <= 1'b0;
+                end
+
                 // In CALC mode, wait for user to choose an operation via switches and confirm via button
                 if (calc_state == CALC_WAIT_OP) begin
                     if (btn_pulse) begin
@@ -1063,6 +1371,14 @@ module top #(
                                                (sw_to_calc_op(mode_sw) == CALC_OP_MUL) ||
                                                (sw_to_calc_op(mode_sw) == CALC_OP_CONV);
                             calc_is_scalar   <= (sw_to_calc_op(mode_sw) == CALC_OP_SCALAR);
+
+                            // Clear previous operands/results
+                            calc_op1_matrix_tight <= {MATRIX_WIDTH{1'b0}};
+                            calc_op2_matrix_tight <= {MATRIX_WIDTH{1'b0}};
+                            calc_result_matrix_tight <= {MATRIX_WIDTH{1'b0}};
+                            calc_result_m <= 8'd1;
+                            calc_result_n <= 8'd1;
+                            calc_exit_to_default <= 1'b0;
                         end
                     end
                 end
@@ -1263,8 +1579,14 @@ module top #(
                         end
 
                         CALC_FLOW_SHOW_ONE_ARM: begin
-                            if (!calc_matrix_tx_busy && !calc_prompt_req && !mode_uart_busy &&
+                            if (!calc_matrix_tx_busy && !calc_result_tx_busy && !calc_prompt_req && !mode_uart_busy &&
                                 !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy) begin
+                                // Latch selected operand matrix for computation (tight packed)
+                                if (calc_operand_idx == 1'b0) begin
+                                    calc_op1_matrix_tight <= calc_matrix_slice;
+                                end else begin
+                                    calc_op2_matrix_tight <= calc_matrix_slice;
+                                end
                                 calc_send_pulse <= 1'b1;
                                 calc_flow       <= CALC_FLOW_SHOW_ONE_WAIT;
                             end
@@ -1285,8 +1607,7 @@ module top #(
                                     calc_prompt_req_sel <= PROMPT_WAIT1;
                                     calc_flow        <= CALC_FLOW_WAIT1_INPUT;
                                 end else begin
-                                    calc_flow <= CALC_FLOW_SEND_CALC;
-                                    calc_word_req <= 1'b1;
+                                    calc_flow <= CALC_FLOW_COMPUTE_LATCH;
                                 end
                             end
                         end
@@ -1296,20 +1617,60 @@ module top #(
                             calc_scalar_disp_en <= 1'b1;
                             if (btn_pulse) begin
                                 if (calc_scalar_val <= 4'd9) begin
-                                    calc_flow     <= CALC_FLOW_SEND_CALC;
-                                    calc_word_req <= 1'b1;
+                                    calc_flow     <= CALC_FLOW_COMPUTE_LATCH;
                                 end
                             end
                         end
 
-                        CALC_FLOW_SEND_CALC: begin
-                            // After finishing all inputs, send fake "calc".
-                            if (!calc_word_req && !calc_word_active && !calc_word_txBusy) begin
-                                // Loop back to dimension input for next run (same op)
+                        CALC_FLOW_COMPUTE_LATCH: begin
+                            // Latch computation results (combinational units) then send over UART.
+                            if (calc_res_valid) begin
+                                calc_result_m <= {5'd0, calc_res_m};
+                                calc_result_n <= {5'd0, calc_res_n};
+                                calc_result_matrix_tight <= padded_5x5_to_tight(calc_res_padded, calc_res_m, calc_res_n);
+                                calc_flow <= CALC_FLOW_RESULT_SEND_ARM;
+                            end else begin
+                                // Unexpected invalid -> restart operand selection
                                 calc_prompt_req     <= 1'b1;
                                 calc_prompt_req_sel <= PROMPT_WAIT1;
                                 calc_operand_idx    <= 1'b0;
                                 calc_flow           <= CALC_FLOW_WAIT1_INPUT;
+                            end
+                        end
+
+                        CALC_FLOW_RESULT_SEND_ARM: begin
+                            if (!calc_result_tx_busy && !calc_matrix_tx_busy && !calc_prompt_req && !mode_uart_busy &&
+                                !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy) begin
+                                calc_result_send_pulse <= 1'b1;
+                                calc_flow <= CALC_FLOW_RESULT_SEND_WAIT;
+                            end
+                        end
+
+                        CALC_FLOW_RESULT_SEND_WAIT: begin
+                            if (!calc_result_tx_busy) begin
+                                calc_flow <= CALC_FLOW_DONE_WAIT_CONFIRM;
+                            end
+                        end
+
+                        CALC_FLOW_DONE_WAIT_CONFIRM: begin
+                            // Wait user confirmation to return to DEFAULT mode.
+                            if (btn_pulse) begin
+                                calc_exit_to_default <= 1'b1;
+                                // Prepare CALC internal state for next entry
+                                calc_state         <= CALC_WAIT_OP;
+                                calc_selected_char <= 8'h00;
+                                calc_op_tx_pending <= 1'b0;
+                                calc_prompt_req    <= 1'b0;
+                                calc_info_req      <= 1'b0;
+                                calc_info_seen_busy<= 1'b0;
+                                calc_flow          <= CALC_FLOW_IDLE;
+                                calc_operand_idx   <= 1'b0;
+                                calc_m_ready       <= 1'b0;
+                                calc_n_ready       <= 1'b0;
+                                calc_id_ready      <= 1'b0;
+                                calc_countdown_en_r  <= 1'b0;
+                                calc_countdown_sec_r <= 5'd0;
+                                calc_countdown_cnt_r <= 32'd0;
                             end
                         end
 
@@ -1327,7 +1688,7 @@ module top #(
                 end
 
                 // Dispatch CALC prompt when UART is clear
-                if (!calc_matrix_tx_busy && !mode_uart_busy && !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy &&
+                if (!calc_matrix_tx_busy && !calc_result_tx_busy && !mode_uart_busy && !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy &&
                     calc_prompt_req && mode_state == MODE_CALC) begin
                     calc_prompt_sel   <= calc_prompt_req_sel;
                     calc_prompt_start <= 1'b1;
@@ -1335,7 +1696,7 @@ module top #(
                 end
 
                 // Dispatch CALC inventory info when UART is clear
-                if (!calc_matrix_tx_busy && !mode_uart_busy && !calc_prompt_uart_busy && !calc_op_tx_busy && !calc_word_txBusy &&
+                if (!calc_matrix_tx_busy && !calc_result_tx_busy && !mode_uart_busy && !calc_prompt_uart_busy && !calc_op_tx_busy && !calc_word_txBusy &&
                     calc_info_req && mode_state == MODE_CALC) begin
                     calc_info_start <= 1'b1;
                     calc_info_req   <= 1'b0;
@@ -1823,6 +2184,9 @@ module top #(
           wire calc_uart_sel_op;
           assign calc_uart_sel_op = calc_op_tx_busy || calc_op_tx_start;
 
+                wire calc_uart_sel_result;
+                assign calc_uart_sel_result = calc_result_tx_busy || calc_result_send_pulse;
+
           assign uart_tx = (mode_state == MODE_SHOW)
                                      ? (show_uart_sel_info ? show_info_uart_tx
                                          : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx))
@@ -1833,7 +2197,8 @@ module top #(
                              : (calc_uart_sel_prompt ? calc_prompt_uart_tx
                                  : (calc_uart_sel_word ? calc_word_uart_tx
                                      : (calc_uart_sel_op ? calc_op_uart_tx
-                                         : (calc_matrix_tx_busy ? calc_matrix_uart_tx : mode_uart_tx)))))
+                                         : (calc_uart_sel_result ? calc_result_uart_tx
+                                             : (calc_matrix_tx_busy ? calc_matrix_uart_tx : mode_uart_tx))))))
                    : mode_uart_tx;
 
 endmodule
