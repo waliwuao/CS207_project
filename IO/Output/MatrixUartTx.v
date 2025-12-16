@@ -32,7 +32,8 @@ module MatrixUartTx #(
     input [7:0] id,
     input ifID,//�Ƿ����id
     input ifNM,//�Ƿ����n��m
-    output wire uartTx//����
+    output wire uartTx,//����
+    output wire busy
 );
     reg sendOneD1, sendOneD2;
     always @(posedge clk or negedge uartTxRstN) begin
@@ -76,6 +77,14 @@ module MatrixUartTx #(
     
     reg isID,isN,isM,isWait,isMatrix,txBusy;
     reg[2:0] idx;
+
+    // Latch inputs at the beginning of a transmission to keep them stable.
+    reg [199:0] matrixData_r;
+    reg [7:0]   m_r;
+    reg [7:0]   n_r;
+    reg [7:0]   id_r;
+
+    assign busy = txBusy;
 
 
     task sendTx;
@@ -139,6 +148,10 @@ module MatrixUartTx #(
             isWait <= 1'b0;
             idx <= 3'b0;
             txBusy <= 1'b0;
+            matrixData_r <= 200'd0;
+            m_r <= 8'd0;
+            n_r <= 8'd0;
+            id_r <= 8'd0;
         end else if(sendFlag && !txBusy) begin
             asciiStart <= 1'b0;
             txStart <= 1'b0;
@@ -152,16 +165,22 @@ module MatrixUartTx #(
             isWait <= 1'b0;
             idx <= 3'b0;
             txBusy <= 1'b1;
+
+            // Capture inputs for this transaction
+            matrixData_r <= matrixData;
+            m_r <= m;
+            n_r <= n;
+            id_r <= id;
         end else if(txBusy) begin
             if(!isID && ifID) begin
-                sendTx(isID, id, 1'b1);
+                sendTx(isID, id_r, 1'b1);
             end else if(!isM && ifNM) begin
-                sendTx(isM, m, 1'b0);
+                sendTx(isM, m_r, 1'b0);
             end else if(!isN && ifNM) begin
-                sendTx(isN, n, 1'b1);
-            end else if(iy<m) begin
+                sendTx(isN, n_r, 1'b1);
+            end else if(iy<m_r) begin
                 if(isMatrix) begin
-                    if(ix<n-1) begin
+                    if(ix<n_r-1) begin
                         ix <= ix + 1;
                     end else begin
                         ix <= 0;
@@ -169,10 +188,10 @@ module MatrixUartTx #(
                     end
                     isMatrix <= 1'b0;
                 end else begin
-                    if(ix<n-1) begin
-                        sendTx(isMatrix, (matrixData>>((iy*n+ix)*8))&8'hFF , 1'b0);
+                    if(ix<n_r-1) begin
+                        sendTx(isMatrix, (matrixData_r>>((iy*n_r+ix)*8))&8'hFF , 1'b0);
                     end else begin
-                        sendTx(isMatrix, (matrixData>>((iy*n+ix)*8))&8'hFF, 1'b1);
+                        sendTx(isMatrix, (matrixData_r>>((iy*n_r+ix)*8))&8'hFF, 1'b1);
                     end
                 end
             end else begin

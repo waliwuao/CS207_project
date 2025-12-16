@@ -533,9 +533,10 @@ module top #(
     wire prompt_uart_tx;
     wire prompt_uart_busy;
     wire matrix_uart_tx;
-    reg  matrix_tx_busy;
+    wire show_matrix_busy;
 
-    assign show_tx_busy = prompt_uart_busy || matrix_tx_busy || show_info_uart_busy;
+    // Use MatrixUartTx busy directly (no registered lag).
+    assign show_tx_busy = prompt_uart_busy || show_matrix_busy || show_info_uart_busy;
 
     ShowUartTx #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
@@ -593,7 +594,8 @@ module top #(
         .id({5'b0, show_cursor} + 8'd1),
         .ifID(1'b1),
         .ifNM(1'b1),
-        .uartTx(matrix_uart_tx)
+        .uartTx(matrix_uart_tx),
+        .busy(show_matrix_busy)
     );
 
     wire mode_uart_tx;
@@ -670,7 +672,7 @@ module top #(
     reg [2:0] calc_prompt_req_sel;
 
     reg       calc_send_pulse;
-    reg       calc_matrix_tx_busy;
+    wire      calc_matrix_tx_busy;
     reg [31:0] calc_matrix_idle_cnt;
 
     // Two-operand dimension bookkeeping (for compatibility validation)
@@ -688,7 +690,7 @@ module top #(
     reg [7:0]   calc_result_m;
     reg [7:0]   calc_result_n;
     reg         calc_result_send_pulse;
-    reg         calc_result_tx_busy;
+    wire        calc_result_tx_busy;
     reg [31:0]  calc_result_idle_cnt;
 
     // Countdown + alert blink for invalid dimension combinations
@@ -848,6 +850,7 @@ module top #(
     assign calc_matrix_slice = storage_rdata[(calc_sel_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
 
     wire calc_matrix_uart_tx;
+    wire calc_matrix_busy_wire;
 
     MatrixUartTx u_calc_matrix (
         .clk(clk),
@@ -859,8 +862,11 @@ module top #(
         .id({5'b0, calc_sel_cursor} + 8'd1),
         .ifID(1'b1),
         .ifNM(1'b1),
-        .uartTx(calc_matrix_uart_tx)
+        .uartTx(calc_matrix_uart_tx),
+        .busy(calc_matrix_busy_wire)
     );
+
+    assign calc_matrix_tx_busy = calc_matrix_busy_wire;
 
     // --------------------
     // CALC computation (uses Calculation/ units)
@@ -1083,6 +1089,7 @@ module top #(
 
     // CALC result matrix TX
     wire calc_result_uart_tx;
+    wire calc_result_busy_wire;
     MatrixUartTx u_calc_result_matrix (
         .clk(clk),
         .uartTxRstN(rst_n),
@@ -1093,84 +1100,11 @@ module top #(
         .id(8'd0),
         .ifID(1'b0),
         .ifNM(1'b1),
-        .uartTx(calc_result_uart_tx)
+        .uartTx(calc_result_uart_tx),
+        .busy(calc_result_busy_wire)
     );
 
-    // Busy detection for result matrix TX
-    localparam integer CALC_RES_BAUD_RATE      = 115200;
-    localparam integer CALC_RES_BIT_CYCLES     = CLK_FREQ_HZ / CALC_RES_BAUD_RATE;
-    localparam integer CALC_RES_IDLE_BIT_GUARD = 12;
-    localparam integer CALC_RES_IDLE_CYCLES    = CALC_RES_BIT_CYCLES * CALC_RES_IDLE_BIT_GUARD;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            calc_result_tx_busy  <= 1'b0;
-            calc_result_idle_cnt <= 32'd0;
-        end else if (mode_state != MODE_CALC) begin
-            calc_result_tx_busy  <= 1'b0;
-            calc_result_idle_cnt <= 32'd0;
-        end else begin
-            if (calc_result_send_pulse && !calc_result_tx_busy) begin
-                calc_result_tx_busy  <= 1'b1;
-                calc_result_idle_cnt <= 32'd0;
-            end
-
-            if (calc_result_tx_busy) begin
-                if (calc_result_uart_tx) begin
-                    if (calc_result_idle_cnt < CALC_RES_IDLE_CYCLES) begin
-                        calc_result_idle_cnt <= calc_result_idle_cnt + 1'b1;
-                    end
-                end else begin
-                    calc_result_idle_cnt <= 32'd0;
-                end
-
-                if (calc_result_idle_cnt >= CALC_RES_IDLE_CYCLES) begin
-                    calc_result_tx_busy  <= 1'b0;
-                    calc_result_idle_cnt <= 32'd0;
-                end
-            end else begin
-                calc_result_idle_cnt <= 32'd0;
-            end
-        end
-    end
-
-    // CALC matrix busy detection (same heuristic as SHOW)
-    localparam integer CALC_BAUD_RATE      = 115200;
-    localparam integer CALC_BIT_CYCLES     = CLK_FREQ_HZ / CALC_BAUD_RATE;
-    localparam integer CALC_IDLE_BIT_GUARD = 12;
-    localparam integer CALC_IDLE_CYCLES    = CALC_BIT_CYCLES * CALC_IDLE_BIT_GUARD;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            calc_matrix_tx_busy  <= 1'b0;
-            calc_matrix_idle_cnt <= 32'd0;
-        end else if (mode_state != MODE_CALC) begin
-            calc_matrix_tx_busy  <= 1'b0;
-            calc_matrix_idle_cnt <= 32'd0;
-        end else begin
-            if (calc_send_pulse && !calc_matrix_tx_busy) begin
-                calc_matrix_tx_busy  <= 1'b1;
-                calc_matrix_idle_cnt <= 32'd0;
-            end
-
-            if (calc_matrix_tx_busy) begin
-                if (calc_matrix_uart_tx) begin
-                    if (calc_matrix_idle_cnt < CALC_IDLE_CYCLES) begin
-                        calc_matrix_idle_cnt <= calc_matrix_idle_cnt + 1'b1;
-                    end
-                end else begin
-                    calc_matrix_idle_cnt <= 32'd0;
-                end
-
-                if (calc_matrix_idle_cnt >= CALC_IDLE_CYCLES) begin
-                    calc_matrix_tx_busy  <= 1'b0;
-                    calc_matrix_idle_cnt <= 32'd0;
-                end
-            end else begin
-                calc_matrix_idle_cnt <= 32'd0;
-            end
-        end
-    end
+    assign calc_result_tx_busy = calc_result_busy_wire;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -1769,10 +1703,10 @@ module top #(
     wire gen_prompt_uart_tx;
     wire gen_prompt_uart_busy;
     wire gen_matrix_uart_tx;
-    reg  gen_matrix_tx_busy;
+    wire gen_matrix_busy_wire;
     wire gen_tx_busy;
 
-    assign gen_tx_busy = gen_prompt_uart_busy || gen_matrix_tx_busy;
+    assign gen_tx_busy = gen_prompt_uart_busy || gen_matrix_busy_wire;
 
     // 请确保你有 random.v
     random u_rand (
@@ -1829,50 +1763,9 @@ module top #(
         .id(gen_id_latched),
         .ifID(1'b1),
         .ifNM(1'b1),
-        .uartTx(gen_matrix_uart_tx)
+        .uartTx(gen_matrix_uart_tx),
+        .busy(gen_matrix_busy_wire)
     );
-
-    // **********************************************
-    // GEN Matrix Busy Detection Logic
-    // **********************************************
-    // 之前报错的地方：这里只保留一份逻辑定义
-    localparam integer GEN_BAUD_RATE      = 115200;
-    localparam integer GEN_BIT_CYCLES     = CLK_FREQ_HZ / GEN_BAUD_RATE;
-    localparam integer GEN_IDLE_BIT_GUARD = 12;
-    localparam integer GEN_IDLE_CYCLES    = GEN_BIT_CYCLES * GEN_IDLE_BIT_GUARD;
-    reg [31:0] gen_matrix_idle_cnt;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            gen_matrix_tx_busy  <= 1'b0;
-            gen_matrix_idle_cnt <= 32'd0;
-        end else if (mode_state != MODE_GEN) begin
-            gen_matrix_tx_busy  <= 1'b0;
-            gen_matrix_idle_cnt <= 32'd0;
-        end else begin
-            if (gen_send_pulse && !gen_matrix_tx_busy) begin
-                gen_matrix_tx_busy  <= 1'b1;
-                gen_matrix_idle_cnt <= 32'd0;
-            end
-
-            if (gen_matrix_tx_busy) begin
-                if (gen_matrix_uart_tx) begin
-                    if (gen_matrix_idle_cnt < GEN_IDLE_CYCLES) begin
-                        gen_matrix_idle_cnt <= gen_matrix_idle_cnt + 1'b1;
-                    end
-                end else begin
-                    gen_matrix_idle_cnt <= 32'd0;
-                end
-
-                if (gen_matrix_idle_cnt >= GEN_IDLE_CYCLES) begin
-                    gen_matrix_tx_busy  <= 1'b0;
-                    gen_matrix_idle_cnt <= 32'd0;
-                end
-            end else begin
-                gen_matrix_idle_cnt <= 32'd0;
-            end
-        end
-    end
 
     // GEN controller FSM
     integer gi;
@@ -2053,7 +1946,7 @@ module top #(
                 GEN_SEND_WAIT: begin
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
-                    end else if (!gen_matrix_tx_busy) begin
+                    end else if (!gen_matrix_busy_wire) begin
                         gen_send_idx <= gen_send_idx + 1'b1;
                         gen_state    <= GEN_SEND_ARM;
                     end
@@ -2118,49 +2011,6 @@ module top #(
 
     assign error_pulse = err_default_mode_sel || err_show_dim || err_calc_op_sel ||
                          err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit;
-
-    // **********************************************
-    // SHOW Matrix Busy Detection Logic
-    // **********************************************
-    localparam integer SHOW_BAUD_RATE      = 115200;
-    localparam integer SHOW_BIT_CYCLES     = CLK_FREQ_HZ / SHOW_BAUD_RATE;
-    localparam integer SHOW_IDLE_BIT_GUARD = 12;
-    localparam integer SHOW_IDLE_CYCLES    = SHOW_BIT_CYCLES * SHOW_IDLE_BIT_GUARD;
-
-    reg [31:0] matrix_idle_cnt;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            matrix_tx_busy <= 1'b0;
-            matrix_idle_cnt<= 32'd0;
-        end else if (mode_state != MODE_SHOW) begin
-            matrix_tx_busy <= 1'b0;
-            matrix_idle_cnt<= 32'd0;
-        end else begin
-            // Arm busy flag on pulse
-            if (show_send_pulse && !matrix_tx_busy) begin
-                matrix_tx_busy <= 1'b1;
-                matrix_idle_cnt<= 32'd0;
-            end
-
-            if (matrix_tx_busy) begin
-                if (matrix_uart_tx) begin 
-                    if (matrix_idle_cnt < SHOW_IDLE_CYCLES) begin
-                        matrix_idle_cnt <= matrix_idle_cnt + 1'b1;
-                    end
-                end else begin
-                    matrix_idle_cnt <= 32'd0;
-                end
-
-                if (matrix_idle_cnt >= SHOW_IDLE_CYCLES) begin
-                    matrix_tx_busy <= 1'b0;
-                    matrix_idle_cnt<= 32'd0;
-                end
-            end else begin
-                matrix_idle_cnt <= 32'd0;
-            end
-        end
-    end
 
     wire show_uart_sel_prompt;
     assign show_uart_sel_prompt = prompt_uart_busy || prompt_start;
