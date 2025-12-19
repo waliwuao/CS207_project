@@ -1,0 +1,72 @@
+.root {
+    -fx-background-color: #1e1e2e; /* 深蓝灰背景 */
+    -fx-font-family: "Segoe UI", "Roboto", sans-serif;
+}
+
+/* 侧边栏 */
+.sidebar {
+    -fx-background-color: #252535;
+    -fx-border-color: transparent #353545 transparent transparent;
+    -fx-padding: 20;
+}
+
+/* 标签 */
+.label {
+    -fx-text-fill: #cdd6f4;
+    -fx-font-size: 14px;
+}
+
+.title-label {
+    -fx-font-size: 24px;
+    -fx-font-weight: bold;
+    -fx-text-fill: linear-gradient(to right, #89b4fa, #cba6f7); /* 渐变色文字 */
+}
+
+/* 按钮 */
+.button {
+    -fx-background-color: #313244;
+    -fx-text-fill: #ffffff;
+    -fx-background-radius: 8;
+    -fx-cursor: hand;
+    -fx-font-weight: bold;
+}
+
+.button:hover {
+    -fx-background-color: #45475a;
+    -fx-effect: dropshadow(gaussian, rgba(137, 180, 250, 0.4), 10, 0, 0, 0);
+}
+
+.button:pressed {
+    -fx-background-color: #89b4fa;
+    -fx-text-fill: #1e1e2e;
+}
+
+/* 组合框 */
+.combo-box {
+    -fx-background-color: #313244;
+    -fx-background-radius: 8;
+    -fx-text-fill: white;
+}
+.combo-box .cell {
+    -fx-text-fill: white;
+}
+
+/* 模式指示器 */
+.mode-badge {
+    -fx-background-color: rgba(243, 139, 168, 0.2);
+    -fx-background-radius: 4;
+    -fx-padding: 5 10 5 10;
+    -fx-text-fill: #f38ba8;
+    -fx-font-weight: bold;
+}
+
+/* 在 css/style.css 中添加 */
+.button-small {
+    -fx-background-color: #313244;
+    -fx-text-fill: white;
+    -fx-padding: 5 10 5 10;
+    -fx-font-size: 12px;
+}
+.button-small:hover {
+    -fx-background-color: #45475a;
+}

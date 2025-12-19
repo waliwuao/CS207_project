@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ScrollPane?>
+<?import javafx.scene.control.Separator?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.StackPane?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox spacing="15" stylesheets="@../css/style.css" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.fpga.ui.RestoreModeController">
+
+    <!-- 标题部分 -->
+    <Label style="-fx-font-size: 18; -fx-font-weight: bold; -fx-text-fill: #fab387;" text="RESTORE MATRIX MODE" />
+    <Label style="-fx-text-fill: #a6adc8;" text="Step 1: Define Dimensions (X=Rows, Y=Cols)" />
+
+    <!-- 维度输入区域 -->
+    <HBox spacing="10" alignment="CENTER_LEFT">
+        <TextField fx:id="xInput" prefWidth="80" promptText="Rows (X)" style="-fx-background-color: #313244; -fx-text-fill: white;" />
+        <Button onAction="#onSendX" text="Send X" styleClass="button-small"/>
+
+        <Label text="x" style="-fx-text-fill: #6c7086; -fx-font-weight: bold;"/>
+
+        <TextField fx:id="yInput" prefWidth="80" promptText="Cols (Y)" style="-fx-background-color: #313244; -fx-text-fill: white;" />
+        <Button onAction="#onSendY" text="Send Y &amp; Gen Grid" styleClass="button-small"/>
+    </HBox>
+
+    <Separator style="-fx-opacity: 0.2;" />
+
+    <Label style="-fx-text-fill: #a6adc8;" text="Step 2: Fill Data &amp; Send" />
+
+    <!-- 矩阵显示区域 -->
+    <!-- fitToWidth/Height 确保滚动区域填满 -->
+    <ScrollPane fitToWidth="true" fitToHeight="true" style="-fx-background: #1e1e2e; -fx-border-color: transparent;" VBox.vgrow="ALWAYS">
+        <content>
+            <!-- StackPane 用于将 GridPane 居中显示 -->
+            <StackPane style="-fx-background-color: #1e1e2e;">
+                <GridPane fx:id="matrixGrid" alignment="CENTER" hgap="8" vgap="8"
+                          style="-fx-padding: 20;">
+                    <!-- 动态生成的矩阵输入框将放在这里 -->
+                </GridPane>
+            </StackPane>
+        </content>
+    </ScrollPane>
+
+    <!-- 底部发送区域 -->
+    <HBox alignment="CENTER_RIGHT" spacing="10">
+        <Label fx:id="statusLabel" text="Waiting for setup..." style="-fx-text-fill: #6c7086;" />
+        <Button fx:id="btnSendData" onAction="#onSendMatrixData" text="SEND ENTIRE MATRIX" disable="true"
+                style="-fx-background-color: #a6e3a1; -fx-text-fill: #1e1e2e; -fx-font-weight: bold;"/>
+    </HBox>
+
+</VBox>

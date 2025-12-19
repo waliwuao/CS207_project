@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.TextArea?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.VBox?>
+<?import javafx.scene.control.Label?>
+
+<VBox spacing="10" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.fpga.ui.ShowModeController">
+    <Label text="MATRIX DISPLAY TERMINAL" style="-fx-font-size: 18; -fx-font-weight: bold; -fx-text-fill: #89b4fa;" />
+
+    <TextArea fx:id="matrixOutput" editable="false" VBox.vgrow="ALWAYS"
+              style="-fx-control-inner-background: #11111b; -fx-text-fill: #a6e3a1; -fx-font-family: 'Consolas', 'Monospaced'; -fx-highlight-fill: #a6e3a1; -fx-highlight-text-fill: #11111b;"
+              text="Waiting for matrix data..." wrapText="true"/>
+
+    <TextField fx:id="inputField" promptText="Type M or N and press Enter..."
+               style="-fx-background-color: #313244; -fx-text-fill: white; -fx-border-color: #45475a; -fx-border-radius: 4;"
+               onAction="#onSendCommand"/>
+</VBox>
