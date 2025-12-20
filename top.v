@@ -326,6 +326,7 @@ module top #(
     reg [2:0] show_state;
     reg [2:0] show_cursor;
     reg       show_send_pulse;
+    reg       show_seen_matrix_busy;
     reg       prompt_start;
     reg [2:0] prompt_sel;
     reg       prompt_req;
@@ -354,6 +355,7 @@ module top #(
             req_n           <= 8'd1;
             show_cursor     <= 3'd0;
             show_send_pulse <= 1'b0;
+            show_seen_matrix_busy <= 1'b0;
             prompt_start    <= 1'b0;
             prompt_sel      <= PROMPT_WAIT1;
             prompt_req      <= 1'b0;
@@ -372,6 +374,7 @@ module top #(
                 prompt_req <= 1'b0;
                 show_info_req <= 1'b0;
                 show_info_seen_busy <= 1'b0;
+                show_seen_matrix_busy <= 1'b0;
             end
 
             case (show_state)
@@ -491,6 +494,7 @@ module top #(
                     end else if (!show_tx_busy && !prompt_req && !mode_uart_busy) begin
                         // UART free, prompt done -> Trigger Matrix Send
                         show_send_pulse <= 1'b1;
+                        show_seen_matrix_busy <= 1'b0;
                         show_state      <= SHOW_SEND_WAIT;
                     end
                 end
@@ -498,10 +502,18 @@ module top #(
                 SHOW_SEND_WAIT: begin
                     if (mode_state != MODE_SHOW) begin
                         show_state <= SHOW_IDLE;
-                    end else if (!show_tx_busy) begin
-                        // Matrix transmission finished
-                        show_cursor <= show_cursor + 1'b1;
-                        show_state  <= SHOW_SEND_ARM;
+                    end else begin
+                        // MatrixUartTx asserts busy one clock after sendOne.
+                        // Don't treat a send as finished until we've observed busy high at least once.
+                        if (show_matrix_busy) begin
+                            show_seen_matrix_busy <= 1'b1;
+                        end
+
+                        if (show_seen_matrix_busy && !show_matrix_busy) begin
+                            // Matrix transmission finished
+                            show_cursor <= show_cursor + 1'b1;
+                            show_state  <= SHOW_SEND_ARM;
+                        end
                     end
                 end
 
@@ -664,6 +676,7 @@ module top #(
     // Matrix listing/selection cursors
     reg [2:0] calc_list_cursor;
     reg [2:0] calc_sel_cursor;
+    reg       calc_seen_matrix_busy;
 
     // Prompt + matrix TX for CALC
     reg       calc_prompt_start;
@@ -691,6 +704,7 @@ module top #(
     reg [7:0]   calc_result_n;
     reg         calc_result_send_pulse;
     wire        calc_result_tx_busy;
+    reg         calc_seen_result_busy;
     reg [31:0]  calc_result_idle_cnt;
 
     // Countdown + alert blink for invalid dimension combinations
@@ -1160,6 +1174,8 @@ module top #(
             calc_result_n <= 8'd1;
             calc_result_send_pulse <= 1'b0;
             calc_exit_to_default <= 1'b0;
+            calc_seen_matrix_busy <= 1'b0;
+            calc_seen_result_busy <= 1'b0;
 
             calc_countdown_en_r  <= 1'b0;
             calc_countdown_sec_r <= 5'd0;
@@ -1470,12 +1486,16 @@ module top #(
                                          !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy) begin
                                 calc_sel_cursor <= calc_list_cursor;
                                 calc_send_pulse <= 1'b1;
+                                calc_seen_matrix_busy <= 1'b0;
                                 calc_flow       <= CALC_FLOW_LIST_WAIT;
                             end
                         end
 
                         CALC_FLOW_LIST_WAIT: begin
-                            if (!calc_matrix_tx_busy) begin
+                            if (calc_matrix_tx_busy) begin
+                                calc_seen_matrix_busy <= 1'b1;
+                            end
+                            if (calc_seen_matrix_busy && !calc_matrix_tx_busy) begin
                                 calc_list_cursor <= calc_list_cursor + 1'b1;
                                 calc_flow        <= CALC_FLOW_LIST_ARM;
                             end
@@ -1522,12 +1542,16 @@ module top #(
                                     calc_op2_matrix_tight <= calc_matrix_slice;
                                 end
                                 calc_send_pulse <= 1'b1;
+                                calc_seen_matrix_busy <= 1'b0;
                                 calc_flow       <= CALC_FLOW_SHOW_ONE_WAIT;
                             end
                         end
 
                         CALC_FLOW_SHOW_ONE_WAIT: begin
-                            if (!calc_matrix_tx_busy) begin
+                            if (calc_matrix_tx_busy) begin
+                                calc_seen_matrix_busy <= 1'b1;
+                            end
+                            if (calc_seen_matrix_busy && !calc_matrix_tx_busy) begin
                                 // Decide next step based on op
                                 if (calc_is_scalar) begin
                                     calc_flow <= CALC_FLOW_SCALAR_WAIT;
@@ -1576,12 +1600,16 @@ module top #(
                             if (!calc_result_tx_busy && !calc_matrix_tx_busy && !calc_prompt_req && !mode_uart_busy &&
                                 !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy) begin
                                 calc_result_send_pulse <= 1'b1;
+                                calc_seen_result_busy <= 1'b0;
                                 calc_flow <= CALC_FLOW_RESULT_SEND_WAIT;
                             end
                         end
 
                         CALC_FLOW_RESULT_SEND_WAIT: begin
-                            if (!calc_result_tx_busy) begin
+                            if (calc_result_tx_busy) begin
+                                calc_seen_result_busy <= 1'b1;
+                            end
+                            if (calc_seen_result_busy && !calc_result_tx_busy) begin
                                 calc_flow <= CALC_FLOW_DONE_WAIT_CONFIRM;
                             end
                         end
@@ -1691,6 +1719,7 @@ module top #(
     reg [2:0] gen_prompt_req_sel;
 
     reg       gen_send_pulse;
+    reg       gen_seen_matrix_busy;
 
     // Random generator control
     reg       rand_enable;
@@ -1778,6 +1807,7 @@ module top #(
             gen_gen_idx        <= 3'd0;
             gen_send_idx       <= 3'd0;
             gen_send_pulse     <= 1'b0;
+            gen_seen_matrix_busy <= 1'b0;
             gen_prompt_start   <= 1'b0;
             gen_prompt_sel     <= PROMPT_WAIT1;
             gen_prompt_req     <= 1'b0;
@@ -1803,6 +1833,7 @@ module top #(
             // If we leave GEN mode, cancel pending prompt requests
             if (mode_state != MODE_GEN) begin
                 gen_prompt_req <= 1'b0;
+                gen_seen_matrix_busy <= 1'b0;
             end
 
             case (gen_state)
@@ -1930,6 +1961,7 @@ module top #(
                         gen_m_latched      <= gen_m;
                         gen_n_latched      <= gen_n;
                         gen_id_latched     <= ({5'b0, gen_send_idx} + 8'd1);
+                        gen_seen_matrix_busy <= 1'b0;
                         gen_state          <= GEN_SEND_PULSE;
                     end
                 end
@@ -1946,9 +1978,14 @@ module top #(
                 GEN_SEND_WAIT: begin
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
-                    end else if (!gen_matrix_busy_wire) begin
-                        gen_send_idx <= gen_send_idx + 1'b1;
-                        gen_state    <= GEN_SEND_ARM;
+                    end else begin
+                        if (gen_matrix_busy_wire) begin
+                            gen_seen_matrix_busy <= 1'b1;
+                        end
+                        if (gen_seen_matrix_busy && !gen_matrix_busy_wire) begin
+                            gen_send_idx <= gen_send_idx + 1'b1;
+                            gen_state    <= GEN_SEND_ARM;
+                        end
                     end
                 end
 
