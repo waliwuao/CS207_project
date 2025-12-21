@@ -13,6 +13,8 @@ module seven_seg_display (
     input  wire [3:0] scalar_val,
     input  wire       countdown_en,
     input  wire [4:0] countdown_sec,
+    input  wire       cycle_disp_en,
+    input  wire [15:0] cycle_count,
     output reg  [6:0] seg,
     output reg  [3:0] an
 );
@@ -39,7 +41,7 @@ module seven_seg_display (
     reg  [7:0] latched_calc_op_char;
 
     wire should_display;
-    assign should_display = countdown_en || display_active || (mode_state == MODE_CALC && calc_op_hold) || scalar_disp_en;
+    assign should_display = countdown_en || display_active || (mode_state == MODE_CALC && calc_op_hold) || scalar_disp_en || cycle_disp_en;
 
     // Detect mode change OR forced mode pulse OR CALC op selection pulse
     always @(posedge clk or negedge rst_n) begin
@@ -159,6 +161,13 @@ module seven_seg_display (
                     2'd2: begin an = 4'b0100; seg = seg_for_hex(countdown_tens); end
                     2'd3: begin an = 4'b1000; seg = seg_for_hex(countdown_ones); end
                     default: begin an = 4'b0000; seg = 7'b0000000; end
+                endcase
+            end else if (cycle_disp_en) begin
+                case (mux_counter)
+                    2'd0: begin an = 4'b0001; seg = seg_for_hex(cycle_count[15:12]); end
+                    2'd1: begin an = 4'b0010; seg = seg_for_hex(cycle_count[11:8]); end
+                    2'd2: begin an = 4'b0100; seg = seg_for_hex(cycle_count[7:4]); end
+                    2'd3: begin an = 4'b1000; seg = seg_for_hex(cycle_count[3:0]); end
                 endcase
             // Scalar live display during CALC scalar-entry: show op (digit0) + scalar (digit3)
             end else if (!display_active && scalar_disp_en) begin

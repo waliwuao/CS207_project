@@ -60,6 +60,7 @@ module top #(
 
     // Matrix packing helpers
     localparam integer MATRIX_WIDTH = 25 * 8;
+    localparam integer CONV_RESULT_WIDTH = 80 * 8;
     localparam integer MATRIX_DEPTH = 5;
     localparam integer TOTAL_WIDTH  = MATRIX_WIDTH * MATRIX_DEPTH;
 
@@ -260,6 +261,7 @@ module top #(
     // 请确保你有 led_display.v
     wire alert_active;
     wire alert_blink_bit;
+    wire [7:0] led_out_wire;
     led_display u_led (
         .mode_state(mode_state),
         .error_active(error_active),
@@ -267,8 +269,11 @@ module top #(
         .alert_active(alert_active),
         .alert_blink_bit(alert_blink_bit),
         .mode_sw(mode_sw),
-        .mode_led(mode_led)
+        .mode_led(led_out_wire)
     );
+    
+    // Debug: show conv_input_cnt on LEDs in CALC mode
+    assign mode_led = (mode_state == MODE_CALC && calc_state == CALC_OP_CONV) ? {4'b0, conv_input_cnt} : led_out_wire;
 
     wire       calc_countdown_en;
     wire [4:0] calc_countdown_sec;
@@ -276,6 +281,9 @@ module top #(
     
     wire setup_scalar_disp_en;
     assign setup_scalar_disp_en = (mode_state == MODE_SETUP) && (setup_state == SETUP_ADJUST);
+
+    wire calc_cycle_disp_en;
+    assign calc_cycle_disp_en = (calc_state == CALC_OP_CONV) && (calc_flow >= CALC_FLOW_RESULT_SEND_ARM);
 
     seven_seg_display u_seg (
         .clk(clk),
@@ -290,6 +298,8 @@ module top #(
         .scalar_val(setup_scalar_disp_en ? setup_scalar_val : calc_scalar_val),
         .countdown_en(calc_countdown_en),
         .countdown_sec(calc_countdown_sec),
+        .cycle_disp_en(calc_cycle_disp_en),
+        .cycle_count(conv_cycles),
         .seg(seg),
         .an(an)
     );
@@ -453,6 +463,7 @@ module top #(
     wire [7:0] rx_digit;
     wire       rx_digit_ok;
     wire       rx_is_ignore;
+    wire       rx_digit_valid_any;
 
     // Detect UART busyness to avoid collision
     wire show_tx_busy;  
@@ -460,6 +471,9 @@ module top #(
 
     assign rx_digit     = decode_digit(rx_data);
     assign rx_digit_ok  = (rx_digit >= 8'd1) && (rx_digit <= 8'd5);
+    assign rx_digit_valid_any = (rx_data >= 8'h30) && (rx_data <= 8'h39);
+    wire [7:0] rx_digit_val_any;
+    assign rx_digit_val_any = rx_data - 8'h30;
     // Ignore CR (0D), LF (0A), Space (20)
     assign rx_is_ignore = (rx_data == 8'h0D) || (rx_data == 8'h0A) || (rx_data == 8'h20);
 
@@ -769,6 +783,9 @@ module top #(
     localparam CALC_FLOW_RESULT_SEND_ARM   = 5'd15;
     localparam CALC_FLOW_RESULT_SEND_WAIT  = 5'd16;
     localparam CALC_FLOW_DONE_WAIT_CONFIRM = 5'd17;
+    localparam CALC_FLOW_CONV_RESET        = 5'd18;
+    localparam CALC_FLOW_CONV_INPUT        = 5'd19;
+    localparam CALC_FLOW_CONV_CONFIRM      = 5'd20;
 
     reg [4:0] calc_flow;
 
@@ -787,6 +804,9 @@ module top #(
     reg [7:0] calc_n_pending;
     reg       calc_id_ready;
     reg [7:0] calc_id_pending;
+    
+    // Convolution input counter
+    reg [3:0] conv_input_cnt;
 
     // Matrix listing/selection cursors
     reg [2:0] calc_list_cursor;
@@ -817,7 +837,7 @@ module top #(
     reg       calc_wait_rand_scalar;
 
     // Result latching for UART output
-    reg [199:0] calc_result_matrix_tight;
+    reg [CONV_RESULT_WIDTH-1:0] calc_result_matrix_tight;
     reg [7:0]   calc_result_m;
     reg [7:0]   calc_result_n;
     reg         calc_result_send_pulse;
@@ -1149,20 +1169,18 @@ module top #(
 
     // Convolution
     wire [71:0]  conv_kernel;
-    assign conv_kernel = padded_5x5_to_kernel3x3(calc_op2_padded);
-    wire [199:0] conv_out_padded;
-    wire [2:0]   conv_m;
-    wire [2:0]   conv_n;
+    assign conv_kernel = padded_5x5_to_kernel3x3(calc_op1_padded);
+    wire [CONV_RESULT_WIDTH-1:0] conv_out_padded;
+    wire [7:0]   conv_m;
+    wire [7:0]   conv_n;
     wire conv_valid;
-    wire [9:0] conv_cycles;
+    wire [15:0] conv_cycles;
+    reg calc_compute_start;
+
     ConvolutionUnit u_conv (
         .clk(clk),
         .reset(~rst_n),
-        .in_m(calc_op1_m[2:0]),
-        .in_n(calc_op1_n[2:0]),
-        .k_m(calc_op2_m[1:0]),
-        .k_n(calc_op2_n[1:0]),
-        .matrix_in(calc_op1_padded),
+        .start(calc_compute_start),
         .kernelMatrix(conv_kernel),
         .out_m(conv_m),
         .out_n(conv_n),
@@ -1172,39 +1190,39 @@ module top #(
     );
 
     // Selected result (padded 5x5) + dims
-    reg [199:0] calc_res_padded;
-    reg [2:0]   calc_res_m;
-    reg [2:0]   calc_res_n;
+    reg [CONV_RESULT_WIDTH-1:0] calc_res_padded;
+    reg [7:0]   calc_res_m;
+    reg [7:0]   calc_res_n;
     reg         calc_res_valid;
 
     always @* begin
-        calc_res_padded = {200{1'b0}};
-        calc_res_m      = 3'd0;
-        calc_res_n      = 3'd0;
+        calc_res_padded = {CONV_RESULT_WIDTH{1'b0}};
+        calc_res_m      = 8'd0;
+        calc_res_n      = 8'd0;
         calc_res_valid  = 1'b0;
         case (calc_state)
             CALC_OP_ADD: begin
-                calc_res_padded = add_out_padded;
-                calc_res_m      = calc_op1_m[2:0];
-                calc_res_n      = calc_op1_n[2:0];
+                calc_res_padded = {{CONV_RESULT_WIDTH-200{1'b0}}, add_out_padded};
+                calc_res_m      = {5'd0, calc_op1_m[2:0]};
+                calc_res_n      = {5'd0, calc_op1_n[2:0]};
                 calc_res_valid  = add_valid;
             end
             CALC_OP_SCALAR: begin
-                calc_res_padded = scalar_out_padded;
-                calc_res_m      = calc_op1_m[2:0];
-                calc_res_n      = calc_op1_n[2:0];
+                calc_res_padded = {{CONV_RESULT_WIDTH-200{1'b0}}, scalar_out_padded};
+                calc_res_m      = {5'd0, calc_op1_m[2:0]};
+                calc_res_n      = {5'd0, calc_op1_n[2:0]};
                 calc_res_valid  = scalar_valid;
             end
             CALC_OP_TRANSPOSE: begin
-                calc_res_padded = trans_out_padded;
-                calc_res_m      = trans_m;
-                calc_res_n      = trans_n;
+                calc_res_padded = {{CONV_RESULT_WIDTH-200{1'b0}}, trans_out_padded};
+                calc_res_m      = {5'd0, trans_m};
+                calc_res_n      = {5'd0, trans_n};
                 calc_res_valid  = trans_valid;
             end
             CALC_OP_MUL: begin
-                calc_res_padded = mul_out_padded;
-                calc_res_m      = mul_m;
-                calc_res_n      = mul_n;
+                calc_res_padded = {{CONV_RESULT_WIDTH-200{1'b0}}, mul_out_padded};
+                calc_res_m      = {5'd0, mul_m};
+                calc_res_n      = {5'd0, mul_n};
                 calc_res_valid  = mul_valid;
             end
             CALC_OP_CONV: begin
@@ -1214,9 +1232,9 @@ module top #(
                 calc_res_valid  = conv_valid;
             end
             default: begin
-                calc_res_padded = {200{1'b0}};
-                calc_res_m      = 3'd0;
-                calc_res_n      = 3'd0;
+                calc_res_padded = {CONV_RESULT_WIDTH{1'b0}};
+                calc_res_m      = 8'd0;
+                calc_res_n      = 8'd0;
                 calc_res_valid  = 1'b0;
             end
         endcase
@@ -1225,7 +1243,9 @@ module top #(
     // CALC result matrix TX
     wire calc_result_uart_tx;
     wire calc_result_busy_wire;
-    MatrixUartTx u_calc_result_matrix (
+    MatrixUartTx #(
+        .DATA_WIDTH(CONV_RESULT_WIDTH)
+    ) u_calc_result_matrix (
         .clk(clk),
         .uartTxRstN(rst_n),
         .sendOne(calc_result_send_pulse),
@@ -1426,8 +1446,17 @@ module top #(
                             calc_op_tx_pending_char <= calc_op_to_char(sw_to_calc_op(mode_sw));
 
                             // Initialize flow after op selection
-                            calc_flow        <= CALC_FLOW_SEND_INFO;
-                            calc_info_req    <= 1'b1;
+                            if (sw_to_calc_op(mode_sw) == CALC_OP_CONV) begin
+                                calc_flow        <= CALC_FLOW_CONV_RESET;
+                                conv_input_cnt   <= 4'd0;
+                                calc_op1_m       <= 8'd3;
+                                calc_op1_n       <= 8'd3;
+                                calc_info_req    <= 1'b0; // No info needed
+                            end else begin
+                                calc_flow        <= CALC_FLOW_SEND_INFO;
+                                calc_info_req    <= 1'b1;
+                            end
+                            
                             calc_info_seen_busy <= 1'b0;
                             calc_prompt_req  <= 1'b0;
                             calc_m_ready     <= 1'b0;
@@ -1435,16 +1464,17 @@ module top #(
                             calc_id_ready    <= 1'b0;
                             calc_operand_idx <= 1'b0;
                             calc_prep_timer  <= 2'd0;
-                            calc_op1_m        <= 8'd1;
-                            calc_op1_n        <= 8'd1;
+                            if (sw_to_calc_op(mode_sw) != CALC_OP_CONV) begin
+                                calc_op1_m        <= 8'd1;
+                                calc_op1_n        <= 8'd1;
+                            end
                             calc_op2_m        <= 8'd1;
                             calc_op2_n        <= 8'd1;
                             calc_countdown_en_r  <= 1'b0;
                             calc_countdown_sec_r <= 5'd0;
                             calc_countdown_cnt_r <= 32'd0;
                             calc_need_second <= (sw_to_calc_op(mode_sw) == CALC_OP_ADD) ||
-                                               (sw_to_calc_op(mode_sw) == CALC_OP_MUL) ||
-                                               (sw_to_calc_op(mode_sw) == CALC_OP_CONV);
+                                               (sw_to_calc_op(mode_sw) == CALC_OP_MUL);
                             calc_is_scalar   <= (sw_to_calc_op(mode_sw) == CALC_OP_SCALAR);
                             rand_scalar_active <= 1'b0;
 
@@ -1703,6 +1733,7 @@ module top #(
                                     calc_flow        <= CALC_FLOW_WAIT1_INPUT;
                                 end else begin
                                     calc_flow <= CALC_FLOW_COMPUTE_LATCH;
+                                    calc_compute_start <= 1'b1;
                                 end
                             end
                         end
@@ -1725,23 +1756,58 @@ module top #(
                             if (btn_pulse) begin
                                 if (calc_scalar_val <= 4'd9) begin
                                     calc_flow     <= CALC_FLOW_COMPUTE_LATCH;
+                                    calc_compute_start <= 1'b1;
                                 end
+                            end
+                        end
+
+                        CALC_FLOW_CONV_RESET: begin
+                            conv_input_cnt <= 4'd0;
+                            calc_flow <= CALC_FLOW_CONV_INPUT;
+                        end
+
+                        CALC_FLOW_CONV_INPUT: begin
+                            if (rx_done && rx_digit_valid_any) begin
+                                if (conv_input_cnt < 4'd9) begin
+                                    calc_op1_matrix_tight[conv_input_cnt*8 +: 8] <= rx_digit_val_any;
+                                    conv_input_cnt <= conv_input_cnt + 1'b1;
+                                end
+                            end
+                            if (conv_input_cnt >= 4'd9) begin
+                                calc_flow <= CALC_FLOW_CONV_CONFIRM;
+                            end
+                        end
+
+                        CALC_FLOW_CONV_CONFIRM: begin
+                            if (btn_pulse) begin
+                                calc_flow <= CALC_FLOW_COMPUTE_LATCH;
+                                calc_compute_start <= 1'b1;
                             end
                         end
 
                         CALC_FLOW_COMPUTE_LATCH: begin
                             // Latch computation results (combinational units) then send over UART.
                             if (calc_res_valid) begin
-                                calc_result_m <= {5'd0, calc_res_m};
-                                calc_result_n <= {5'd0, calc_res_n};
-                                calc_result_matrix_tight <= padded_5x5_to_tight(calc_res_padded, calc_res_m, calc_res_n);
+                                calc_result_m <= calc_res_m;
+                                calc_result_n <= calc_res_n;
+                                if (calc_state == CALC_OP_CONV) begin
+                                    calc_result_matrix_tight <= calc_res_padded;
+                                end else begin
+                                    calc_result_matrix_tight <= {{CONV_RESULT_WIDTH-200{1'b0}}, padded_5x5_to_tight(calc_res_padded[199:0], calc_res_m[2:0], calc_res_n[2:0])};
+                                end
                                 calc_flow <= CALC_FLOW_RESULT_SEND_ARM;
+                                calc_compute_start <= 1'b0;
                             end else begin
-                                // Unexpected invalid -> restart operand selection
-                                calc_prompt_req     <= 1'b1;
-                                calc_prompt_req_sel <= PROMPT_WAIT1;
-                                calc_operand_idx    <= 1'b0;
-                                calc_flow           <= CALC_FLOW_WAIT1_INPUT;
+                                if (calc_state == CALC_OP_CONV) begin
+                                    calc_compute_start <= 1'b0;
+                                end else begin
+                                    // Unexpected invalid -> restart operand selection
+                                    calc_prompt_req     <= 1'b1;
+                                    calc_prompt_req_sel <= PROMPT_WAIT1;
+                                    calc_operand_idx    <= 1'b0;
+                                    calc_flow           <= CALC_FLOW_WAIT1_INPUT;
+                                    calc_compute_start <= 1'b0;
+                                end
                             end
                         end
 

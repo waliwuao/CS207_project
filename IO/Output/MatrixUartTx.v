@@ -21,18 +21,19 @@
 
 
 module MatrixUartTx #(
-    parameter NUM_DIGHT = 32
-) ( //ֻ�������������????
+    parameter NUM_DIGHT = 32,
+    parameter DATA_WIDTH = 200
+) ( //ֻ????
     input  wire clk, 
     input uartTxRstN,
-    input sendOne,//����
-    input [199:0] matrixData,
+    input sendOne,//
+    input [DATA_WIDTH-1:0] matrixData,
     input [7:0] m,
     input [7:0] n,
     input [7:0] id,
-    input ifID,//�Ƿ����id
-    input ifNM,//�Ƿ����n��m
-    output wire uartTx,//����
+    input ifID,//Ƿid
+    input ifNM,//Ƿnm
+    output wire uartTx,//
     output wire busy
 );
     reg sendOneD1, sendOneD2;
@@ -48,7 +49,7 @@ module MatrixUartTx #(
     wire sendFlag;
     assign sendFlag = sendOneD1 & ~sendOneD2;
 
-    reg [2:0] ix,iy;//��������
+    reg [7:0] ix,iy;//
 
     reg asciiStart;
     reg [7:0] key,txDt;
@@ -79,7 +80,7 @@ module MatrixUartTx #(
     reg[2:0] idx;
 
     // Latch inputs at the beginning of a transmission to keep them stable.
-    reg [199:0] matrixData_r;
+    reg [DATA_WIDTH-1:0] matrixData_r;
     reg [7:0]   m_r;
     reg [7:0]   n_r;
     reg [7:0]   id_r;
@@ -90,7 +91,7 @@ module MatrixUartTx #(
     task sendTx;
     inout   isDone;         // isID / isN / isM
     input   [7:0] keyVal;    // id/n/m
-    input   isLineFeed; //�Ƿ��ͻ��з�
+    input   isLineFeed; //Ƿͻз
     begin
         if(!isWait) begin
             asciiStart <= 1'b1;
@@ -148,7 +149,7 @@ module MatrixUartTx #(
             isWait <= 1'b0;
             idx <= 3'b0;
             txBusy <= 1'b0;
-            matrixData_r <= 200'd0;
+            matrixData_r <= {DATA_WIDTH{1'b0}};
             m_r <= 8'd0;
             n_r <= 8'd0;
             id_r <= 8'd0;
