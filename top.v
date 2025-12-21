@@ -133,24 +133,98 @@ module top #(
         .readData(rand_data_flat)
     );
 
-    reg [31:0] uart_shift_reg;
+    reg [47:0] uart_shift_reg;
     reg        rand_detected;
+    reg        matrix_detected;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            uart_shift_reg <= 32'd0;
+            uart_shift_reg <= 48'd0;
             rand_detected  <= 1'b0;
+            matrix_detected <= 1'b0;
         end else begin
             if (rx_done) begin
-                uart_shift_reg <= {uart_shift_reg[23:0], rx_data};
+                uart_shift_reg <= {uart_shift_reg[39:0], rx_data};
                 // Check if the NEW shift register content (formed by old[23:0] + rx_data) is "rand"
                 if ({uart_shift_reg[23:0], rx_data} == "rand") begin
                     rand_detected <= 1'b1;
                 end else begin
                     rand_detected <= 1'b0;
                 end
+
+                // Check for "matrix"
+                if ({uart_shift_reg[39:0], rx_data} == "matrix") begin
+                    matrix_detected <= 1'b1;
+                end else begin
+                    matrix_detected <= 1'b0;
+                end
             end else begin
                 rand_detected <= 1'b0;
+                matrix_detected <= 1'b0;
+            end
+        end
+    end
+
+    // --------------------
+    // SETUP Mode Logic
+    // --------------------
+    localparam SETUP_IDLE = 2'd0;
+    localparam SETUP_WAIT_CONFIRM = 2'd1;
+    localparam SETUP_ADJUST = 2'd2;
+
+    reg [1:0] setup_state;
+    reg [2:0] user_max_limit;
+    reg       setup_error_pulse;
+
+    // Helper to extract scalar from switches (same as CALC mode)
+    wire [3:0] setup_scalar_val;
+    assign setup_scalar_val = {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
+
+    // Use storage_rst (POR) instead of rst_n for user_max_limit
+    // so it survives the user reset (which returns to DEFAULT mode).
+    always @(posedge clk or posedge storage_rst) begin
+        if (storage_rst) begin
+            setup_state <= SETUP_IDLE;
+            user_max_limit <= 3'd3; // Default to 3
+            setup_error_pulse <= 1'b0;
+        end else begin
+            setup_error_pulse <= 1'b0; // Pulse default low
+
+            // If global reset (rst_n) is asserted, we should reset the state machine
+            // but NOT the user_max_limit.
+            if (!rst_n) begin
+                setup_state <= SETUP_IDLE;
+            end else begin
+                if (mode_state != MODE_SETUP) begin
+                    setup_state <= SETUP_IDLE;
+                end else begin
+                    case (setup_state)
+                        SETUP_IDLE: begin
+                            if (matrix_detected) begin
+                                setup_state <= SETUP_WAIT_CONFIRM;
+                            end
+                        end
+                        SETUP_WAIT_CONFIRM: begin
+                            if (btn_pulse) begin
+                                setup_state <= SETUP_ADJUST;
+                            end
+                        end
+                        SETUP_ADJUST: begin
+                            if (btn_pulse) begin
+                                // Validate input
+                                // Max storage range is 5 (physical limit)
+                                // Cannot be 0
+                                if (setup_scalar_val > 0 && setup_scalar_val <= 5) begin
+                                    user_max_limit <= setup_scalar_val[2:0];
+                                    setup_state <= SETUP_IDLE;
+                                end else begin
+                                    setup_error_pulse <= 1'b1;
+                                    // Stay in ADJUST
+                                end
+                            end
+                        end
+                    endcase
+                end
             end
         end
     end
@@ -196,10 +270,13 @@ module top #(
         .mode_led(mode_led)
     );
 
-    // 请确保你有 seven_seg_display.v
     wire       calc_countdown_en;
     wire [4:0] calc_countdown_sec;
     reg        calc_force_mode_pulse;
+    
+    wire setup_scalar_disp_en;
+    assign setup_scalar_disp_en = (mode_state == MODE_SETUP) && (setup_state == SETUP_ADJUST);
+
     seven_seg_display u_seg (
         .clk(clk),
         .rst_n(rst_n),
@@ -208,9 +285,9 @@ module top #(
         .calc_op_pulse(calc_op_disp_pulse),
         .calc_op_char(calc_op_disp_char),
         .calc_op_hold(calc_op_hold),
-        .calc_op_hold_char(calc_op_hold_char),
-        .scalar_disp_en(calc_scalar_disp_en),
-        .scalar_val(calc_scalar_val),
+        .calc_op_hold_char(setup_scalar_disp_en ? "L" : calc_op_hold_char),
+        .scalar_disp_en(calc_scalar_disp_en | setup_scalar_disp_en),
+        .scalar_val(setup_scalar_disp_en ? setup_scalar_val : calc_scalar_val),
         .countdown_en(calc_countdown_en),
         .countdown_sec(calc_countdown_sec),
         .seg(seg),
@@ -295,6 +372,7 @@ module top #(
         .writeEnable(storage_we),
         .dimX(storage_dimX),
         .dimY(storage_dimY),
+        .user_max_limit(user_max_limit),
         .writeData(storage_wdata),
         .readData(storage_rdata),
         .fillState(storage_count)
@@ -1964,7 +2042,7 @@ module top #(
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
                     end else if (rx_done) begin
-                        if ((rx_digit >= 8'd1) && (rx_digit <= 8'd3)) begin
+                        if ((rx_digit >= 8'd1) && (rx_digit <= {5'd0, user_max_limit})) begin
                             gen_k       <= rx_digit;
                             gen_gen_idx <= 3'd0;
                             gen_send_idx<= 3'd0;
@@ -2121,10 +2199,10 @@ module top #(
     assign err_gen_digit = (mode_state == MODE_GEN) &&
                            ((gen_state == GEN_WAIT_M) || (gen_state == GEN_WAIT_N) || (gen_state == GEN_WAIT_K)) &&
                            rx_done && !rx_is_ignore &&
-                           !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= 8'd3)) : rx_digit_ok);
+                           !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= {5'd0, user_max_limit})) : rx_digit_ok);
 
     assign error_pulse = err_default_mode_sel || err_show_dim || err_calc_op_sel ||
-                         err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit;
+                         err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit || setup_error_pulse;
 
     wire show_uart_sel_prompt;
     assign show_uart_sel_prompt = prompt_uart_busy || prompt_start;
