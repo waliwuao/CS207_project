@@ -118,6 +118,43 @@ module top #(
                                  (mode_sw == 5'b01000) ||
                                  (mode_sw == 5'b10000);
 
+    // --------------------
+    // Random Generator & Command Detection
+    // --------------------
+    wire [25*8-1:0] rand_data_flat;
+    reg [7:0]       rand_max_val;
+    reg             rand_gen_enable;
+    
+    random u_random (
+        .clk(clk),
+        .rst(~rst_n),
+        .genEnable(rand_gen_enable),
+        .max_val(rand_max_val),
+        .readData(rand_data_flat)
+    );
+
+    reg [31:0] uart_shift_reg;
+    reg        rand_detected;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            uart_shift_reg <= 32'd0;
+            rand_detected  <= 1'b0;
+        end else begin
+            if (rx_done) begin
+                uart_shift_reg <= {uart_shift_reg[23:0], rx_data};
+                // Check if the NEW shift register content (formed by old[23:0] + rx_data) is "rand"
+                if ({uart_shift_reg[23:0], rx_data} == "rand") begin
+                    rand_detected <= 1'b1;
+                end else begin
+                    rand_detected <= 1'b0;
+                end
+            end else begin
+                rand_detected <= 1'b0;
+            end
+        end
+    end
+
     // Allow CALC mode to return to DEFAULT by user confirmation (no global reset).
     reg calc_exit_to_default;
 
@@ -698,6 +735,9 @@ module top #(
     reg [199:0] calc_op1_matrix_tight;
     reg [199:0] calc_op2_matrix_tight;
 
+    reg       calc_wait_rand;
+    reg       calc_wait_rand_scalar;
+
     // Result latching for UART output
     reg [199:0] calc_result_matrix_tight;
     reg [7:0]   calc_result_m;
@@ -742,8 +782,11 @@ module top #(
 
     // Scalar input via switches
     wire [3:0] calc_scalar_val;
+    reg        rand_scalar_active;
+    reg [3:0]  rand_scalar_stored;
     // Physical switch order is reversed for scalar entry: bit-reverse the 4 LSBs.
-    assign calc_scalar_val = {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
+    // If random scalar is active, use stored random value.
+    assign calc_scalar_val = rand_scalar_active ? rand_scalar_stored : {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
     reg        calc_scalar_disp_en;
 
     // Fake compute word TX ("calc\n")
@@ -1269,6 +1312,10 @@ module top #(
                 calc_word_idx      <= 3'd0;
                 calc_prep_timer    <= 2'd0;
 
+                calc_wait_rand     <= 1'b0;
+                calc_wait_rand_scalar <= 1'b0;
+                rand_scalar_active <= 1'b0;
+
                 calc_countdown_en_r  <= 1'b0;
                 calc_countdown_sec_r <= 5'd0;
                 calc_countdown_cnt_r <= 32'd0;
@@ -1321,6 +1368,7 @@ module top #(
                                                (sw_to_calc_op(mode_sw) == CALC_OP_MUL) ||
                                                (sw_to_calc_op(mode_sw) == CALC_OP_CONV);
                             calc_is_scalar   <= (sw_to_calc_op(mode_sw) == CALC_OP_SCALAR);
+                            rand_scalar_active <= 1'b0;
 
                             // Clear previous operands/results
                             calc_op1_matrix_tight <= {MATRIX_WIDTH{1'b0}};
@@ -1503,7 +1551,18 @@ module top #(
 
                         CALC_FLOW_SEL_INPUT: begin
                             // User types matrix id (1..5), then confirms with button
-                            if (rx_done) begin
+                            if (rand_detected) begin
+                                rand_max_val    <= {5'd0, storage_count} - 8'd1; // 0..(count-1)
+                                rand_gen_enable <= 1'b1;
+                                calc_wait_rand  <= 1'b1;
+                            end else if (calc_wait_rand) begin
+                                rand_gen_enable <= 1'b0;
+                                calc_wait_rand  <= 1'b0;
+                                // Use first byte of random data. Add 1 to get 1..count
+                                calc_id_pending <= rand_data_flat[7:0] + 8'd1;
+                                calc_id_ready   <= 1'b1;
+                                calc_flow       <= CALC_FLOW_SEL_CONFIRM;
+                            end else if (rx_done) begin
                                 if (rx_digit_ok) begin
                                     calc_id_pending <= rx_digit;
                                     calc_id_ready   <= 1'b1;
@@ -1573,6 +1632,18 @@ module top #(
                         CALC_FLOW_SCALAR_WAIT: begin
                             // Live show scalar via 7-seg; confirm button to finalize.
                             calc_scalar_disp_en <= 1'b1;
+
+                            if (rand_detected) begin
+                                rand_max_val          <= 8'd9;
+                                rand_gen_enable       <= 1'b1;
+                                calc_wait_rand_scalar <= 1'b1;
+                            end else if (calc_wait_rand_scalar) begin
+                                rand_gen_enable       <= 1'b0;
+                                calc_wait_rand_scalar <= 1'b0;
+                                rand_scalar_stored    <= rand_data_flat[3:0];
+                                rand_scalar_active    <= 1'b1;
+                            end
+
                             if (btn_pulse) begin
                                 if (calc_scalar_val <= 4'd9) begin
                                     calc_flow     <= CALC_FLOW_COMPUTE_LATCH;
@@ -2024,12 +2095,18 @@ module top #(
     assign err_calc_op_sel = (mode_state == MODE_CALC) && (calc_state == CALC_WAIT_OP) &&
                              btn_pulse && !mode_sw_valid_onehot;
 
+    wire rx_is_rand_char;
+    assign rx_is_rand_char = (rx_data == "r") || (rx_data == "a") || (rx_data == "n") || (rx_data == "d");
+
     // CALC: invalid UART digit during dimension / id entry (non-ignored, not 1..5).
     assign err_calc_uart_digit = (mode_state == MODE_CALC) &&
-                                 ((calc_flow == CALC_FLOW_WAIT1_INPUT)   || (calc_flow == CALC_FLOW_WAIT1_CONFIRM) ||
-                                  (calc_flow == CALC_FLOW_WAIT2_INPUT)   || (calc_flow == CALC_FLOW_WAIT2_CONFIRM) ||
-                                  (calc_flow == CALC_FLOW_SEL_INPUT)     || (calc_flow == CALC_FLOW_SEL_CONFIRM)) &&
-                                 rx_done && !rx_digit_ok && !rx_is_ignore;
+                                 rx_done && !rx_digit_ok && !rx_is_ignore &&
+                                 (
+                                    ((calc_flow == CALC_FLOW_WAIT1_INPUT)   || (calc_flow == CALC_FLOW_WAIT1_CONFIRM) ||
+                                     (calc_flow == CALC_FLOW_WAIT2_INPUT)   || (calc_flow == CALC_FLOW_WAIT2_CONFIRM))
+                                    ||
+                                    (((calc_flow == CALC_FLOW_SEL_INPUT)     || (calc_flow == CALC_FLOW_SEL_CONFIRM)) && !rx_is_rand_char)
+                                 );
 
     // CALC: invalid matrix id confirm (out of current storage_count range).
     assign err_calc_id_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SEL_CONFIRM) &&
