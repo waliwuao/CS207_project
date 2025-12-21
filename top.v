@@ -1964,7 +1964,7 @@ module top #(
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
                     end else if (rx_done) begin
-                        if ((rx_digit >= 8'd1) && (rx_digit <= 8'd5)) begin
+                        if ((rx_digit >= 8'd1) && (rx_digit <= 8'd3)) begin
                             gen_k       <= rx_digit;
                             gen_gen_idx <= 3'd0;
                             gen_send_idx<= 3'd0;
@@ -2121,7 +2121,7 @@ module top #(
     assign err_gen_digit = (mode_state == MODE_GEN) &&
                            ((gen_state == GEN_WAIT_M) || (gen_state == GEN_WAIT_N) || (gen_state == GEN_WAIT_K)) &&
                            rx_done && !rx_is_ignore &&
-                           !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= 8'd5)) : rx_digit_ok);
+                           !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= 8'd3)) : rx_digit_ok);
 
     assign error_pulse = err_default_mode_sel || err_show_dim || err_calc_op_sel ||
                          err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit;
