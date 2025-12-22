@@ -7,7 +7,8 @@ module matrixIO (
     input [2:0] user_max_limit,  // User defined max limit (Should be <= 3 now)
     input [25*8-1:0] writeData,  // Data to write (single matrix, 25 elements)
     output reg [3*25*8-1:0] readData, 
-    output reg [2:0] fillState   // Fill state
+    output reg [2:0] fillState,   // Fill state
+    output [74:0] matrixListInfo // Flattened count of all dimensions
 );
 
     // Parameter definition
@@ -125,5 +126,13 @@ module matrixIO (
             fillState <= scaleCnt[current_scale_idx];
         end
     end
+
+    // Flatten scaleCnt for matrixListInfo
+    genvar gi;
+    generate
+        for (gi = 0; gi < MAX_SCALE; gi = gi + 1) begin : gen_info
+            assign matrixListInfo[gi*3 +: 3] = scaleCnt[gi];
+        end
+    endgenerate
 
 endmodule
