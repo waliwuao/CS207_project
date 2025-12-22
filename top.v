@@ -195,7 +195,7 @@ module top #(
         end
     endfunction
 
-    // 璇风‘淇濅綘鏈� debouncer.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 debouncer.v
     debouncer #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_db (
@@ -205,7 +205,7 @@ module top #(
         .key_flag(btn_pulse)
     );
 
-    // 璇风‘淇濅綘鏈� error_blink.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 error_blink.v
     error_blink #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BLINK_HZ(BLINK_HZ)
@@ -365,7 +365,7 @@ module top #(
         end
     end
 
-    // 璇风‘淇濅綘鏈� led_display.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 led_display.v
     wire alert_active;
     wire alert_blink_bit;
     wire [7:0] led_out_wire;
@@ -415,7 +415,7 @@ module top #(
     // UART RX for SHOW input
     // --------------------
 
-    // 璇风‘淇濅綘鏈� UartRx.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 UartRx.v
     UartRx #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_rx (
@@ -577,7 +577,7 @@ module top #(
                            (storage_read_idx == 3'd1) ? storage_rdata_all[399:200] :
                            (storage_read_idx == 3'd2) ? storage_rdata_all[599:400] : {MATRIX_WIDTH{1'b0}};
 
-    // 璇风‘淇濅綘鏈� matrixIO.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 matrixIO.v
     matrixIO u_matrix_store (
         .clk(clk),
         .rst(storage_rst),
@@ -707,7 +707,7 @@ module top #(
                 SHOW_IDLE: begin
                     show_cursor <= 3'd0;
                     prep_timer  <= 2'd0;
-                    // 銆愬叧閿慨鏀广�戝繀椤荤瓑寰� mode_uart_busy 缁撴潫锛屽惁鍒� SHOW 娑堟伅浼氳瑕嗙洊
+                    // 閵嗘劕鍙ч柨顔绘叏閺�骞匡拷鎴濈箑妞よ崵鐡戝锟� mode_uart_busy 缂佹挻娼敍灞芥儊閸掞拷 SHOW 濞戝牊浼呮导姘愁潶鐟曞棛娲�
                     if (mode_state == MODE_SHOW && !mode_uart_busy) begin
                         // Entry point: Request "show" then "wait1"
                         prompt_req     <= 1'b1;
@@ -937,8 +937,7 @@ module top #(
         .uartTxRstN(rst_n),
         .sendOne(shared_info_start),
         .matrixListInfo(matrix_list_info),
-        .uartTx(shared_info_tx),
-        .busy(shared_info_busy)
+        .uartTx(shared_info_tx)
     );
 
     // --- Shared Matrix TX ---
@@ -1001,7 +1000,7 @@ module top #(
 
     wire mode_uart_tx;
 
-    // 璇风‘淇濅綘鏈� ModeUartNotifier.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 ModeUartNotifier.v
     ModeUartNotifier #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ)
     ) u_mode_uart (
@@ -2137,7 +2136,6 @@ module top #(
         .uartRxRstN(rst_n),
         .rx(uart_rx),
         .rxStart(gen_rx_start),
-        .cntLimit({5'd0, user_max_limit}),
         .m(gen_rx_m),
         .n(gen_rx_n),
         .cnt(gen_rx_cnt),
@@ -2145,7 +2143,7 @@ module top #(
         .rxError(gen_rx_error)
     );
 
-    // 璇风‘淇濅綘鏈� random.v
+    // 鐠囬鈥樻穱婵呯稑閺堬拷 random.v
     random u_rand (
         .clk(clk),
         .rst(storage_rst),
@@ -2251,7 +2249,7 @@ module top #(
 
             case (gen_state)
                 GEN_IDLE: begin
-                    // 銆愬叧閿慨鏀广�戝繀椤荤瓑寰� mode_uart_busy 缁撴潫锛屽惁鍒� GEN 娑堟伅浼氳瑕嗙洊
+                    // 閵嗘劕鍙ч柨顔绘叏閺�骞匡拷鎴濈箑妞よ崵鐡戝锟� mode_uart_busy 缂佹挻娼敍灞芥儊閸掞拷 GEN 濞戝牊浼呮导姘愁潶鐟曞棛娲�
                     if (mode_state == MODE_GEN && !mode_uart_busy) begin
                         gen_prompt_req     <= 1'b1;
                         gen_prompt_req_sel <= PROMPT_GENERATE;
@@ -2455,7 +2453,7 @@ module top #(
     wire store_uart_sel_matrix;
     assign store_uart_sel_matrix = shared_matrix_busy || store_send_pulse || (store_state_fsm == STORE_WAIT && !store_seen_matrix_busy);
 
-    // 銆愬叧閿慨鏀广�憁ode_uart_busy 浼樺厛绾ф渶楂橈紝淇濊瘉 GEN/SHOW 鐘舵�佸悕鑳藉鍙戝嚭鍘�
+    // 閵嗘劕鍙ч柨顔绘叏閺�骞匡拷鎲乷de_uart_busy 娴兼ê鍘涚痪褎娓舵姗堢礉娣囨繆鐦� GEN/SHOW 閻樿埖锟戒礁鎮曢懗钘夘檮閸欐垵鍤崢锟�
     assign uart_tx = mode_uart_busy ? mode_uart_tx :
                      (mode_state == MODE_SHOW) ? (show_uart_sel_info ? show_info_uart_tx : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)) :
                      (mode_state == MODE_GEN)  ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx) :
