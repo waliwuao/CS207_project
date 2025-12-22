@@ -25,7 +25,7 @@ module NMUartRx (// put \n as end
     input wire uartRxRstN,
     input wire rx, 
     input wire rxStart,
-    input wire an;
+    input wire an,
     input wire [74:0] matrixListInfo,
     output reg [7:0] m,
     output reg [7:0] n,
@@ -150,3 +150,4 @@ module NMUartRx (// put \n as end
         end
     end
 endmodule
+
