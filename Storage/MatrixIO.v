@@ -5,14 +5,15 @@ module matrixIO (
     input [7:0] dimX,            // Matrix X dimension (1-5)
     input [7:0] dimY,            // Matrix Y dimension (1-5)
     input [2:0] user_max_limit,  // User defined max limit
+    input [2:0] readIdx,         // Logical index to read (0..user_max_limit-1)
     input [25*8-1:0] writeData,  // Data to write (single matrix, 25 elements)
-    output reg [5*25*8-1:0] readData, // Flattened data of 5 matrices
+    output reg [25*8-1:0] readData, // Flattened data of 1 matrix
     output reg [2:0] fillState   // Fill state (number of matrices stored)
 );
 
     // Parameter definition
     localparam MAX_SCALE = 25;   // Total number of dimension combinations (5x5)
-    localparam MAX_MATRIX = 5;   // Maximum number of matrices stored for each dimension (Physical limit)
+    localparam MAX_MATRIX = 3;   // Maximum number of matrices stored for each dimension (Physical limit)
     localparam MAX_ELEM = 25;    // Maximum number of elements in each matrix
     localparam ELEM_WIDTH = 8;   // Bit width of each element
 
@@ -31,7 +32,6 @@ module matrixIO (
     integer j;
     integer k;
     integer elemIdx;
-    integer mIdx;
     integer eIdx;
     integer baseSlot;
     integer srcSlot;
@@ -59,7 +59,7 @@ module matrixIO (
                 scaleCnt[i] <= 3'd0; // Reset counter
             end
             scaleIdx <= 5'd0;
-            readData <= {(MAX_MATRIX*MAX_ELEM*ELEM_WIDTH){1'b0}};
+            readData <= {(MAX_ELEM*ELEM_WIDTH){1'b0}};
             fillState <= 3'd0;
             last_limit <= 3'd3; // Default limit
         end else begin
@@ -125,22 +125,20 @@ module matrixIO (
                 baseSlot = 0;
             end
 
-            for (mIdx = 0; mIdx < MAX_MATRIX; mIdx = mIdx + 1) begin
-                // Map output slot mIdx -> source slot in circular buffer
-                if (mIdx < scaleCnt[current_scale_idx]) begin
-                    srcSlot = baseSlot + mIdx;
-                    if (srcSlot >= user_max_limit) begin
-                        srcSlot = srcSlot - user_max_limit;
-                    end
-                    for (eIdx = 0; eIdx < MAX_ELEM; eIdx = eIdx + 1) begin
-                        readData[(mIdx*MAX_ELEM*ELEM_WIDTH) + (eIdx*ELEM_WIDTH) +: ELEM_WIDTH] <=
-                            mem[current_scale_idx][srcSlot][eIdx];
-                    end
-                end else begin
-                    // Clear unused output slots
-                    for (eIdx = 0; eIdx < MAX_ELEM; eIdx = eIdx + 1) begin
-                        readData[(mIdx*MAX_ELEM*ELEM_WIDTH) + (eIdx*ELEM_WIDTH) +: ELEM_WIDTH] <= {ELEM_WIDTH{1'b0}};
-                    end
+            // Map output slot readIdx -> source slot in circular buffer
+            if (readIdx < scaleCnt[current_scale_idx]) begin
+                srcSlot = baseSlot + readIdx;
+                if (srcSlot >= user_max_limit) begin
+                    srcSlot = srcSlot - user_max_limit;
+                end
+                for (eIdx = 0; eIdx < MAX_ELEM; eIdx = eIdx + 1) begin
+                    readData[(eIdx*ELEM_WIDTH) +: ELEM_WIDTH] <=
+                        mem[current_scale_idx][srcSlot][eIdx];
+                end
+            end else begin
+                // Clear unused output slots
+                for (eIdx = 0; eIdx < MAX_ELEM; eIdx = eIdx + 1) begin
+                    readData[(eIdx*ELEM_WIDTH) +: ELEM_WIDTH] <= {ELEM_WIDTH{1'b0}};
                 end
             end
 

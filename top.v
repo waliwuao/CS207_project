@@ -61,8 +61,8 @@ module top #(
     // Matrix packing helpers
     localparam integer MATRIX_WIDTH = 25 * 8;
     localparam integer CONV_RESULT_WIDTH = 80 * 8;
-    localparam integer MATRIX_DEPTH = 5;
-    localparam integer TOTAL_WIDTH  = MATRIX_WIDTH * MATRIX_DEPTH;
+    localparam integer MATRIX_DEPTH = 3;
+    localparam integer TOTAL_WIDTH  = MATRIX_WIDTH; // Reduced to single matrix width
 
     // --------------------
     // Basic mode handling
@@ -213,9 +213,9 @@ module top #(
                         SETUP_ADJUST: begin
                             if (btn_pulse) begin
                                 // Validate input
-                                // Max storage range is 5 (physical limit)
+                                // Max storage range is 3 (physical limit)
                                 // Cannot be 0
-                                if (setup_scalar_val > 0 && setup_scalar_val <= 5) begin
+                                if (setup_scalar_val > 0 && setup_scalar_val <= 3) begin
                                     user_max_limit <= setup_scalar_val[2:0];
                                     setup_state <= SETUP_IDLE;
                                 end else begin
@@ -251,6 +251,8 @@ module top #(
                     end
                 end
             end else if (mode_state == MODE_CALC && calc_exit_to_default) begin
+                mode_state <= MODE_DEFAULT;
+            end else if (mode_state == MODE_STORE && store_exit_to_default) begin
                 mode_state <= MODE_DEFAULT;
             end else begin
                 mode_state <= mode_state; // Stay in mode until explicit exit/reset
@@ -321,6 +323,51 @@ module top #(
         .rxDone(rx_done)
     );
 
+    // --------------------
+    // UART RX for STORE mode (Matrix Input)
+    // --------------------
+    reg        store_rx_start;
+    wire [7:0] store_m;
+    wire [7:0] store_n;
+    wire [199:0] store_matrix_data;
+    wire       store_rx_done;
+    wire       store_rx_error;
+
+    MatrixUartRx u_store_rx (
+        .clk(clk),
+        .uartRxRstN(rst_n),
+        .rx(uart_rx),
+        .rxStart(store_rx_start),
+        .lowerLimit(8'd0),
+        .upperLimit(8'd9),
+        .m(store_m),
+        .n(store_n),
+        .matrixData(store_matrix_data),
+        .rxDone(store_rx_done),
+        .rxError(store_rx_error)
+    );
+
+    // --------------------
+    // UART TX for STORE mode (Echo)
+    // --------------------
+    reg        store_tx_start;
+    wire       store_tx_busy;
+    wire       store_uart_tx;
+
+    MatrixUartTx u_store_tx (
+        .clk(clk),
+        .uartTxRstN(rst_n),
+        .sendOne(store_tx_start),
+        .matrixData(store_matrix_data),
+        .m(store_m),
+        .n(store_n),
+        .id(8'd0), // ID not used for echo
+        .ifID(1'b0),
+        .ifNM(1'b1),
+        .uartTx(store_uart_tx),
+        .busy(store_tx_busy)
+    );
+
     function automatic [7:0] decode_digit;
         input [7:0] v;
         begin
@@ -375,6 +422,17 @@ module top #(
     reg [199:0] gen_write_wdata;
     reg [7:0] gen_m, gen_n; 
 
+    reg [2:0] storage_read_idx;
+    always @(*) begin
+        if (mode_state == MODE_SHOW) begin
+            storage_read_idx = show_cursor;
+        end else if (mode_state == MODE_CALC) begin
+            storage_read_idx = calc_sel_cursor;
+        end else begin
+            storage_read_idx = 3'd0;
+        end
+    end
+
     // 请确保你有 matrixIO.v
     matrixIO u_matrix_store (
         .clk(clk),
@@ -383,10 +441,88 @@ module top #(
         .dimX(storage_dimX),
         .dimY(storage_dimY),
         .user_max_limit(user_max_limit),
+        .readIdx(storage_read_idx),
         .writeData(storage_wdata),
         .readData(storage_rdata),
         .fillState(storage_count)
     );
+
+    // --------------------
+    // STORE Mode Logic
+    // --------------------
+    localparam STORE_IDLE = 3'd0;
+    localparam STORE_WAIT_RX = 3'd1;
+    localparam STORE_ECHO = 3'd2;
+    localparam STORE_ECHO_BUSY = 3'd3;
+    localparam STORE_DONE = 3'd4;
+
+    reg [2:0] store_state;
+    reg       store_exit_to_default;
+    reg       store_error_pulse;
+    reg       store_write_req;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            store_state <= STORE_IDLE;
+            store_rx_start <= 1'b0;
+            store_tx_start <= 1'b0;
+            store_exit_to_default <= 1'b0;
+            store_error_pulse <= 1'b0;
+            store_write_req <= 1'b0;
+        end else begin
+            store_rx_start <= 1'b0;
+            store_tx_start <= 1'b0;
+            store_exit_to_default <= 1'b0;
+            store_error_pulse <= 1'b0;
+            store_write_req <= 1'b0;
+
+            if (mode_state != MODE_STORE) begin
+                store_state <= STORE_IDLE;
+            end else begin
+                case (store_state)
+                    STORE_IDLE: begin
+                        // Start RX immediately upon entry
+                        store_rx_start <= 1'b1;
+                        store_state <= STORE_WAIT_RX;
+                    end
+                    STORE_WAIT_RX: begin
+                        if (store_rx_done) begin
+                            if (!store_rx_error) begin
+                                // Valid data received, echo it back
+                                store_tx_start <= 1'b1;
+                                store_state <= STORE_ECHO;
+                            end else begin
+                                // Invalid data, blink error and retry
+                                store_error_pulse <= 1'b1;
+                                store_rx_start <= 1'b1;
+                                store_state <= STORE_WAIT_RX;
+                            end
+                        end
+                    end
+                    STORE_ECHO: begin
+                        // Wait for busy to assert
+                        if (store_tx_busy) begin
+                            store_state <= STORE_ECHO_BUSY;
+                        end
+                    end
+                    STORE_ECHO_BUSY: begin
+                        // Wait for transmission to finish
+                        if (!store_tx_busy) begin
+                            store_state <= STORE_DONE;
+                        end
+                    end
+                    STORE_DONE: begin
+                        if (btn_pulse) begin
+                            // Valid data confirmed, write and exit
+                            store_write_req <= 1'b1;
+                            store_exit_to_default <= 1'b1;
+                            store_state <= STORE_IDLE;
+                        end
+                    end
+                endcase
+            end
+        end
+    end
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -404,6 +540,11 @@ module top #(
                     storage_dimX  <= gen_write_dimX;
                     storage_dimY  <= gen_write_dimY;
                     storage_wdata <= gen_write_wdata;
+                    storage_we    <= 1'b1;
+                end else if (store_write_req) begin
+                    storage_dimX  <= store_m;
+                    storage_dimY  <= store_n;
+                    storage_wdata <= store_matrix_data;
                     storage_we    <= 1'b1;
                 end else if (mode_state == MODE_SHOW) begin
                     if (show_info_scan_active) begin
@@ -669,7 +810,7 @@ module top #(
     // --------------------
 
     wire [199:0] show_matrix_slice;
-    assign show_matrix_slice = storage_rdata[(show_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
+    assign show_matrix_slice = storage_rdata;
 
     wire prompt_uart_tx;
     wire prompt_uart_busy;
@@ -1002,7 +1143,7 @@ module top #(
 
     // CALC matrix TX
     wire [199:0] calc_matrix_slice;
-    assign calc_matrix_slice = storage_rdata[(calc_sel_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
+    assign calc_matrix_slice = storage_rdata;
 
     wire calc_matrix_uart_tx;
     wire calc_matrix_busy_wire;
@@ -2268,7 +2409,7 @@ module top #(
                            !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= {5'd0, user_max_limit})) : rx_digit_ok);
 
     assign error_pulse = err_default_mode_sel || err_show_dim || err_calc_op_sel ||
-                         err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit || setup_error_pulse;
+                         err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit || setup_error_pulse || store_error_pulse;
 
     wire show_uart_sel_prompt;
     assign show_uart_sel_prompt = prompt_uart_busy || prompt_start;
@@ -2300,6 +2441,8 @@ module top #(
                                          : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx))
                    : (mode_state == MODE_GEN)
                    ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx)
+                   : (mode_state == MODE_STORE)
+                   ? store_uart_tx
                    : (mode_state == MODE_CALC)
                          ? (calc_uart_sel_info   ? calc_info_uart_tx
                              : (calc_uart_sel_prompt ? calc_prompt_uart_tx

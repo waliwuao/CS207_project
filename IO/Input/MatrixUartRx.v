@@ -183,7 +183,7 @@ module MatrixUartRx (// put \n as end
                             isBusy <= 1'b0;
                             rxError <= 1'b0;
                         end
-                        matrixData <= (matrixData&(({1'b1}<<(idx*8))-1)) + ({200'b0,tmp}<<(idx*8));
+                        matrixData <= (matrixData & ~(200'hFF << (idx*8))) | ({192'b0, tmp} << (idx*8));
                         tmp <= 8'b0;
                         idx <= idx + 1;
                         isNum <= 1'b0;
