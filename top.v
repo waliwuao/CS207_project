@@ -49,6 +49,77 @@ module top #(
     assign storage_rst = ~storage_por_done;
 
     // --------------------
+    // Forward Declarations
+    // --------------------
+    // UART RX
+    wire [7:0] rx_data;
+    wire       rx_done;
+    
+    // CALC State & Flow
+    reg [2:0]  calc_state;
+    reg [4:0]  calc_flow;
+    reg [3:0]  conv_input_cnt;
+    reg [2:0]  calc_sel_cursor; // Moved here
+    reg [2:0]  show_cursor;     // Moved here
+    
+    // CALC Display & Control
+    reg        calc_op_disp_pulse;
+    reg [7:0]  calc_op_disp_char;
+    wire       calc_op_hold;
+    wire [7:0] calc_op_hold_char;
+    reg        calc_scalar_disp_en;
+    wire [3:0] calc_scalar_val;
+    wire [15:0] conv_cycles;
+    
+    // UART Busy Signals (SHOW)
+    wire       prompt_uart_busy;
+    wire       show_tx_busy;
+    wire       mode_uart_busy;
+    wire       show_matrix_busy;
+    wire       shared_matrix_busy; // Moved here for forward declaration
+    
+    // UART Busy Signals (CALC)
+    wire       calc_info_uart_busy;
+    wire       calc_matrix_tx_busy;
+    wire       calc_result_tx_busy;
+    wire       calc_op_tx_busy;
+    wire       calc_word_txBusy;
+    wire       calc_prompt_uart_busy;
+    
+    // CALC RX Signals
+    wire       calc_nm_done;
+    wire       calc_nm_error;
+    wire [7:0] calc_nm_m;
+    wire [7:0] calc_nm_n;
+    wire       calc_id_done;
+    wire       calc_id_error;
+    wire [7:0] calc_id_val;
+    
+    // GEN Signals
+    wire       gen_prompt_uart_busy;
+    wire       gen_matrix_busy_wire;
+    wire       gen_tx_busy;
+    wire       gen_rx_done;
+    wire       gen_rx_error;
+    wire [7:0] gen_rx_m;
+    wire [7:0] gen_rx_n;
+    wire [7:0] gen_rx_cnt;
+
+    // Forward Declarations for Output Multiplexing (used before definition)
+    reg        calc_prompt_start;
+    reg [2:0]  calc_prompt_sel;
+    reg        calc_send_pulse;
+    wire [199:0] calc_matrix_slice;
+
+    reg        gen_prompt_start;
+    reg [2:0]  gen_prompt_sel;
+    reg        gen_send_pulse;
+    reg [199:0] gen_matrix_latched;
+    reg [7:0]   gen_m_latched;
+    reg [7:0]   gen_n_latched;
+    reg [7:0]   gen_id_latched;
+
+    // --------------------
     // Mode definitions
     // --------------------
     localparam MODE_DEFAULT = 3'd0;
@@ -57,6 +128,42 @@ module top #(
     localparam MODE_SHOW    = 3'd3;
     localparam MODE_CALC    = 3'd4;
     localparam MODE_SETUP   = 3'd5;
+
+    // --------------------
+    // CALC Parameters (Moved from below)
+    // --------------------
+    localparam CALC_WAIT_OP      = 3'd0;
+    localparam CALC_OP_TRANSPOSE = 3'd1;
+    localparam CALC_OP_ADD       = 3'd2;
+    localparam CALC_OP_SCALAR    = 3'd3;
+    localparam CALC_OP_MUL       = 3'd4;
+    localparam CALC_OP_CONV      = 3'd5;
+
+    // CALC flow state machine (after op selected)
+    localparam CALC_FLOW_IDLE              = 5'd0;
+    localparam CALC_FLOW_SEND_INFO         = 5'd1;
+    localparam CALC_FLOW_GET_DIMS          = 5'd2; // Replaces WAIT1/2 INPUT/CONFIRM
+    // localparam CALC_FLOW_WAIT1_INPUT       = 5'd2;
+    // localparam CALC_FLOW_WAIT1_CONFIRM     = 5'd3;
+    // localparam CALC_FLOW_WAIT2_INPUT       = 5'd4;
+    // localparam CALC_FLOW_WAIT2_CONFIRM     = 5'd5;
+    localparam CALC_FLOW_PREP              = 5'd6;
+    localparam CALC_FLOW_LIST_ARM          = 5'd7;
+    localparam CALC_FLOW_LIST_WAIT         = 5'd8;
+    localparam CALC_FLOW_GET_ID            = 5'd9; // Replaces SEL INPUT/CONFIRM
+    // localparam CALC_FLOW_SEL_INPUT         = 5'd9;
+    // localparam CALC_FLOW_SEL_CONFIRM       = 5'd10;
+    localparam CALC_FLOW_SHOW_ONE_ARM      = 5'd11;
+    localparam CALC_FLOW_SHOW_ONE_WAIT     = 5'd12;
+    localparam CALC_FLOW_SCALAR_WAIT       = 5'd13;
+    localparam CALC_FLOW_COMPUTE_LATCH     = 5'd14;
+    localparam CALC_FLOW_RESULT_SEND_ARM   = 5'd15;
+    localparam CALC_FLOW_RESULT_SEND_WAIT  = 5'd16;
+    localparam CALC_FLOW_DONE_WAIT_CONFIRM = 5'd17;
+    localparam CALC_FLOW_CONV_RESET        = 5'd18;
+    localparam CALC_FLOW_CONV_INPUT        = 5'd19;
+    localparam CALC_FLOW_CONV_CONFIRM      = 5'd20;
+    localparam CALC_FLOW_LIST_SEND         = 5'd21;
 
     // Matrix packing helpers
     localparam integer MATRIX_WIDTH = 25 * 8;
@@ -307,8 +414,6 @@ module top #(
     // --------------------
     // UART RX for SHOW input
     // --------------------
-    wire [7:0] rx_data;
-    wire       rx_done;
 
     // 请确保你有 UartRx.v
     UartRx #(
@@ -333,13 +438,106 @@ module top #(
     endfunction
 
     // --------------------
+    // UART RX for STORE input
+    // --------------------
+    wire [7:0]   store_rx_m;
+    wire [7:0]   store_rx_n;
+    wire [199:0] store_rx_data;
+    wire         store_rx_done;
+    wire         store_rx_error;
+    reg          store_rx_start;
+
+    // STORE mode FSM for RX and Echo
+    localparam STORE_IDLE = 2'd0;
+    localparam STORE_RX   = 2'd1;
+    localparam STORE_TX   = 2'd2;
+    localparam STORE_WAIT = 2'd3;
+    reg [1:0] store_state_fsm;
+    reg       store_send_pulse;
+    reg       store_seen_matrix_busy;
+
+    
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            store_state_fsm <= STORE_IDLE;
+            store_rx_start <= 1'b0;
+            store_send_pulse <= 1'b0;
+            store_seen_matrix_busy <= 1'b0;
+        end else begin
+            store_rx_start <= 1'b0;
+            store_send_pulse <= 1'b0;
+            
+            if (mode_state != MODE_STORE) begin
+                store_state_fsm <= STORE_IDLE;
+                store_seen_matrix_busy <= 1'b0;
+            end else begin
+                case (store_state_fsm)
+                    STORE_IDLE: begin
+                        // Start RX immediately upon entry
+                        store_rx_start <= 1'b1;
+                        store_state_fsm <= STORE_RX;
+                    end
+                    STORE_RX: begin
+                        if (store_rx_done) begin
+                            if (!store_rx_error) begin
+                                // Received valid matrix. Storage write happens in parallel (see storage block).
+                                // Now echo it back using MatrixUartTx.
+                                store_state_fsm <= STORE_TX;
+                            end else begin
+                                // Error, retry RX
+                                store_rx_start <= 1'b1;
+                            end
+                        end
+                    end
+                    STORE_TX: begin
+                        // Wait for shared UART to be free
+                        if (!shared_matrix_busy && !mode_uart_busy) begin
+                            store_send_pulse <= 1'b1;
+                            store_seen_matrix_busy <= 1'b0;
+                            store_state_fsm <= STORE_WAIT;
+                        end
+                    end
+                    STORE_WAIT: begin
+                        if (shared_matrix_busy) begin
+                            store_seen_matrix_busy <= 1'b1;
+                        end
+                        if (store_seen_matrix_busy && !shared_matrix_busy) begin
+                            // Done sending, ready for next input
+                            store_rx_start <= 1'b1;
+                            store_state_fsm <= STORE_RX;
+                        end
+                    end
+                    default: begin
+                        store_state_fsm <= STORE_IDLE;
+                        store_seen_matrix_busy <= 1'b0;
+                    end
+                endcase
+            end
+        end
+    end
+
+    MatrixUartRx u_store_rx (
+        .clk(clk),
+        .uartRxRstN(rst_n),
+        .rx(uart_rx),
+        .rxStart(store_rx_start),
+        .lowerLimit(8'd0),
+        .upperLimit(8'd9),
+        .m(store_rx_m),
+        .n(store_rx_n),
+        .matrixData(store_rx_data),
+        .rxDone(store_rx_done),
+        .rxError(store_rx_error)
+    );
+
+    // --------------------
     // Matrix storage
     // --------------------
     reg               storage_we;
     reg [7:0]         storage_dimX;
     reg [7:0]         storage_dimY;
     reg [199:0]       storage_wdata;
-    wire [TOTAL_WIDTH-1:0] storage_rdata;
+    wire [MATRIX_WIDTH-1:0] storage_rdata;
     wire [2:0]        storage_count;
 
     // SHOW controller signals needed for matrixIO
@@ -354,19 +552,12 @@ module top #(
     reg        show_info_seen_busy;
     wire       show_info_uart_busy;
     wire       show_info_uart_tx;
-    wire       show_info_scan_active;
-    wire [7:0] show_info_dimX;
-    wire [7:0] show_info_dimY;
 
     // CALC matrix inventory info (same format as SHOW)
     reg        calc_info_req;
     reg        calc_info_start;
     reg        calc_info_seen_busy;
-    wire       calc_info_uart_busy;
     wire       calc_info_uart_tx;
-    wire       calc_info_scan_active;
-    wire [7:0] calc_info_dimX;
-    wire [7:0] calc_info_dimY;
 
     // Forward declarations for GEN signals used in storage block
     reg       gen_write_req;
@@ -374,6 +565,17 @@ module top #(
     reg [7:0] gen_write_dimY;
     reg [199:0] gen_write_wdata;
     reg [7:0] gen_m, gen_n; 
+    
+    wire [74:0] matrix_list_info;
+
+    wire [2:0] storage_read_idx;
+    assign storage_read_idx = (mode_state == MODE_SHOW) ? show_cursor :
+                              (mode_state == MODE_CALC) ? calc_sel_cursor : 3'd0;
+
+    wire [3*MATRIX_WIDTH-1:0] storage_rdata_all;
+    assign storage_rdata = (storage_read_idx == 3'd0) ? storage_rdata_all[199:0] :
+                           (storage_read_idx == 3'd1) ? storage_rdata_all[399:200] :
+                           (storage_read_idx == 3'd2) ? storage_rdata_all[599:400] : {MATRIX_WIDTH{1'b0}};
 
     // 请确保你有 matrixIO.v
     matrixIO u_matrix_store (
@@ -383,9 +585,11 @@ module top #(
         .dimX(storage_dimX),
         .dimY(storage_dimY),
         .user_max_limit(user_max_limit),
+        // .readIdx(storage_read_idx), // Removed
         .writeData(storage_wdata),
-        .readData(storage_rdata),
-        .fillState(storage_count)
+        .readData(storage_rdata_all),
+        .fillState(storage_count),
+        .matrixListInfo(matrix_list_info)
     );
 
     always @(posedge clk or negedge rst_n) begin
@@ -405,22 +609,17 @@ module top #(
                     storage_dimY  <= gen_write_dimY;
                     storage_wdata <= gen_write_wdata;
                     storage_we    <= 1'b1;
+                end else if (mode_state == MODE_STORE && store_rx_done && !store_rx_error) begin
+                    storage_dimX  <= store_rx_m;
+                    storage_dimY  <= store_rx_n;
+                    storage_wdata <= store_rx_data;
+                    storage_we    <= 1'b1;
                 end else if (mode_state == MODE_SHOW) begin
-                    if (show_info_scan_active) begin
-                        storage_dimX <= show_info_dimX;
-                        storage_dimY <= show_info_dimY;
-                    end else begin
-                        storage_dimX <= req_m;
-                        storage_dimY <= req_n;
-                    end
+                    storage_dimX <= req_m;
+                    storage_dimY <= req_n;
                 end else if (mode_state == MODE_CALC) begin
-                    if (calc_info_scan_active) begin
-                        storage_dimX <= calc_info_dimX;
-                        storage_dimY <= calc_info_dimY;
-                    end else begin
-                        storage_dimX <= calc_req_m;
-                        storage_dimY <= calc_req_n;
-                    end
+                    storage_dimX <= calc_req_m;
+                    storage_dimY <= calc_req_n;
                 end else if (mode_state == MODE_GEN) begin
                     storage_dimX <= gen_m;
                     storage_dimY <= gen_n;
@@ -449,7 +648,7 @@ module top #(
     localparam PROMPT_SHOW     = 3'd5;
 
     reg [2:0] show_state;
-    reg [2:0] show_cursor;
+    // reg [2:0] show_cursor; // Moved to top
     reg       show_send_pulse;
     reg       show_seen_matrix_busy;
     reg       prompt_start;
@@ -465,9 +664,7 @@ module top #(
     wire       rx_is_ignore;
     wire       rx_digit_valid_any;
 
-    // Detect UART busyness to avoid collision
-    wire show_tx_busy;  
-    wire mode_uart_busy; 
+    // Detect UART busyness to avoid collision 
 
     assign rx_digit     = decode_digit(rx_data);
     assign rx_digit_ok  = (rx_digit >= 8'd1) && (rx_digit <= 8'd5);
@@ -669,74 +866,136 @@ module top #(
     // --------------------
 
     wire [199:0] show_matrix_slice;
-    assign show_matrix_slice = storage_rdata[(show_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
+    assign show_matrix_slice = storage_rdata;
 
     wire prompt_uart_tx;
-    wire prompt_uart_busy;
     wire matrix_uart_tx;
-    wire show_matrix_busy;
+    // wire show_info_uart_tx; // Removed duplicate
+    // wire calc_info_uart_tx; // Removed duplicate
+    
+    // Explicit declarations for shared signals
+    wire calc_prompt_uart_tx;
+    wire gen_prompt_uart_tx;
+    wire calc_matrix_uart_tx;
+    wire gen_matrix_uart_tx;
+    // wire calc_matrix_busy_wire; // Removed (using calc_matrix_tx_busy directly)
+    // wire gen_matrix_busy_wire;  // Removed (declared at top)
 
     // Use MatrixUartTx busy directly (no registered lag).
     assign show_tx_busy = prompt_uart_busy || show_matrix_busy || show_info_uart_busy;
 
+    // --- Shared Prompt TX ---
+    wire shared_prompt_start;
+    wire [2:0] shared_prompt_sel;
+    wire shared_prompt_busy;
+    wire shared_prompt_tx;
+
+    assign shared_prompt_start = (mode_state == MODE_SHOW) ? prompt_start :
+                                 (mode_state == MODE_CALC) ? calc_prompt_start :
+                                 (mode_state == MODE_GEN)  ? gen_prompt_start : 1'b0;
+    
+    assign shared_prompt_sel   = (mode_state == MODE_SHOW) ? prompt_sel :
+                                 (mode_state == MODE_CALC) ? calc_prompt_sel :
+                                 (mode_state == MODE_GEN)  ? gen_prompt_sel : 3'd0;
+
+    assign prompt_uart_busy      = shared_prompt_busy;
+    assign calc_prompt_uart_busy = shared_prompt_busy;
+    assign gen_prompt_uart_busy  = shared_prompt_busy;
+    assign prompt_uart_tx        = shared_prompt_tx;
+    assign calc_prompt_uart_tx   = shared_prompt_tx;
+    assign gen_prompt_uart_tx    = shared_prompt_tx;
+
     ShowUartTx #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BAUD_RATE(115200)
-    ) u_show_prompt (
+    ) u_shared_prompt (
         .clk(clk),
         .uartTxRstN(rst_n),
         .sendOne(1'b0),
-        .promptStart(prompt_start),
-        .promptSel(prompt_sel),
-        .uartTx(prompt_uart_tx),
-        .busy(prompt_uart_busy)
+        .promptStart(shared_prompt_start),
+        .promptSel(shared_prompt_sel),
+        .uartTx(shared_prompt_tx),
+        .busy(shared_prompt_busy)
     );
 
-    // SHOW inventory info TX (new)
-    ShowMatrixInfoTx #(
-        .CLK_FREQ_HZ(CLK_FREQ_HZ),
-        .BAUD_RATE(115200)
-    ) u_show_info (
-        .clk(clk),
-        .rst_n(rst_n),
-        .start(show_info_start),
-        .dimX(show_info_dimX),
-        .dimY(show_info_dimY),
-        .count(storage_count),
-        .scan_active(show_info_scan_active),
-        .uartTx(show_info_uart_tx),
-        .busy(show_info_uart_busy)
-    );
+    // --- Shared Info TX ---
+    wire shared_info_start;
+    wire shared_info_busy;
+    wire shared_info_tx;
 
-    // CALC inventory info TX (reuse SHOW format)
-    ShowMatrixInfoTx #(
-        .CLK_FREQ_HZ(CLK_FREQ_HZ),
-        .BAUD_RATE(115200)
-    ) u_calc_info (
-        .clk(clk),
-        .rst_n(rst_n),
-        .start(calc_info_start),
-        .dimX(calc_info_dimX),
-        .dimY(calc_info_dimY),
-        .count(storage_count),
-        .scan_active(calc_info_scan_active),
-        .uartTx(calc_info_uart_tx),
-        .busy(calc_info_uart_busy)
-    );
+    assign shared_info_start = (mode_state == MODE_SHOW) ? show_info_start :
+                               (mode_state == MODE_CALC) ? calc_info_start : 1'b0;
+    
+    assign show_info_uart_busy = shared_info_busy;
+    assign calc_info_uart_busy = shared_info_busy;
+    assign show_info_uart_tx   = shared_info_tx;
+    assign calc_info_uart_tx   = shared_info_tx;
 
-    // 请确保你有 MatrixUartTx.v
-    MatrixUartTx u_show_matrix (
+    InfoUartTx u_shared_info (
         .clk(clk),
         .uartTxRstN(rst_n),
-        .sendOne(show_send_pulse),
-        .matrixData(show_matrix_slice),
-        .m(req_m),
-        .n(req_n),
-        .id({5'b0, show_cursor} + 8'd1),
-        .ifID(1'b1),
+        .sendOne(shared_info_start),
+        .matrixListInfo(matrix_list_info),
+        .uartTx(shared_info_tx),
+        .busy(shared_info_busy)
+    );
+
+    // --- Shared Matrix TX ---
+    wire shared_matrix_send;
+    wire [199:0] shared_matrix_data;
+    wire [7:0] shared_matrix_m;
+    wire [7:0] shared_matrix_n;
+    wire [7:0] shared_matrix_id;
+    // wire shared_matrix_busy; // Moved to forward declarations
+    wire shared_matrix_tx;
+
+    assign shared_matrix_send = (mode_state == MODE_SHOW) ? show_send_pulse :
+                                (mode_state == MODE_CALC) ? calc_send_pulse :
+                                (mode_state == MODE_GEN)  ? gen_send_pulse :
+                                (mode_state == MODE_STORE)? store_send_pulse : 1'b0;
+
+    assign shared_matrix_data = (mode_state == MODE_SHOW) ? show_matrix_slice :
+                                (mode_state == MODE_CALC) ? calc_matrix_slice :
+                                (mode_state == MODE_GEN)  ? gen_matrix_latched :
+                                (mode_state == MODE_STORE)? store_rx_data : {MATRIX_WIDTH{1'b0}};
+    
+    assign shared_matrix_m    = (mode_state == MODE_SHOW) ? req_m :
+                                (mode_state == MODE_CALC) ? calc_req_m :
+                                (mode_state == MODE_GEN)  ? gen_m_latched :
+                                (mode_state == MODE_STORE)? store_rx_m : 8'd1;
+
+    assign shared_matrix_n    = (mode_state == MODE_SHOW) ? req_n :
+                                (mode_state == MODE_CALC) ? calc_req_n :
+                                (mode_state == MODE_GEN)  ? gen_n_latched :
+                                (mode_state == MODE_STORE)? store_rx_n : 8'd1;
+
+    assign shared_matrix_id   = (mode_state == MODE_SHOW) ? ({5'b0, show_cursor} + 8'd1) :
+                                (mode_state == MODE_CALC) ? ({5'b0, calc_sel_cursor} + 8'd1) :
+                                (mode_state == MODE_GEN)  ? gen_id_latched :
+                                (mode_state == MODE_STORE)? 8'd0 : 8'd1; // ID 0 for echo
+
+    assign show_matrix_busy      = shared_matrix_busy;
+    assign calc_matrix_tx_busy   = shared_matrix_busy;
+    assign gen_matrix_busy_wire  = shared_matrix_busy;
+    assign matrix_uart_tx        = shared_matrix_tx;
+    assign calc_matrix_uart_tx   = shared_matrix_tx;
+    assign gen_matrix_uart_tx    = shared_matrix_tx;
+
+    wire shared_matrix_ifID;
+    assign shared_matrix_ifID = (mode_state == MODE_STORE) ? 1'b0 : 1'b1;
+
+    MatrixUartTx u_shared_matrix (
+        .clk(clk),
+        .uartTxRstN(rst_n),
+        .sendOne(shared_matrix_send),
+        .matrixData(shared_matrix_data),
+        .m(shared_matrix_m),
+        .n(shared_matrix_n),
+        .id(shared_matrix_id),
+        .ifID(shared_matrix_ifID),
         .ifNM(1'b1),
-        .uartTx(matrix_uart_tx),
-        .busy(show_matrix_busy)
+        .uartTx(shared_matrix_tx),
+        .busy(shared_matrix_busy)
     );
 
     wire mode_uart_tx;
@@ -755,39 +1014,7 @@ module top #(
     // --------------------
     // CALC controller (operation type selection only; actual math TBD)
     // --------------------
-    localparam CALC_WAIT_OP      = 3'd0;
-    localparam CALC_OP_TRANSPOSE = 3'd1;
-    localparam CALC_OP_ADD       = 3'd2;
-    localparam CALC_OP_SCALAR    = 3'd3;
-    localparam CALC_OP_MUL       = 3'd4;
-    localparam CALC_OP_CONV      = 3'd5;
-
-    reg [2:0] calc_state;
-
-    // CALC flow state machine (after op selected)
-    localparam CALC_FLOW_IDLE              = 5'd0;
-    localparam CALC_FLOW_SEND_INFO         = 5'd1;
-    localparam CALC_FLOW_WAIT1_INPUT       = 5'd2;
-    localparam CALC_FLOW_WAIT1_CONFIRM     = 5'd3;
-    localparam CALC_FLOW_WAIT2_INPUT       = 5'd4;
-    localparam CALC_FLOW_WAIT2_CONFIRM     = 5'd5;
-    localparam CALC_FLOW_PREP              = 5'd6;
-    localparam CALC_FLOW_LIST_ARM          = 5'd7;
-    localparam CALC_FLOW_LIST_WAIT         = 5'd8;
-    localparam CALC_FLOW_SEL_INPUT         = 5'd9;
-    localparam CALC_FLOW_SEL_CONFIRM       = 5'd10;
-    localparam CALC_FLOW_SHOW_ONE_ARM      = 5'd11;
-    localparam CALC_FLOW_SHOW_ONE_WAIT     = 5'd12;
-    localparam CALC_FLOW_SCALAR_WAIT       = 5'd13;
-    localparam CALC_FLOW_COMPUTE_LATCH     = 5'd14;
-    localparam CALC_FLOW_RESULT_SEND_ARM   = 5'd15;
-    localparam CALC_FLOW_RESULT_SEND_WAIT  = 5'd16;
-    localparam CALC_FLOW_DONE_WAIT_CONFIRM = 5'd17;
-    localparam CALC_FLOW_CONV_RESET        = 5'd18;
-    localparam CALC_FLOW_CONV_INPUT        = 5'd19;
-    localparam CALC_FLOW_CONV_CONFIRM      = 5'd20;
-
-    reg [4:0] calc_flow;
+    // Parameters moved to top of file for visibility
 
     // Timer to wait for storage lookup after setting dims
     reg [1:0] calc_prep_timer;
@@ -806,21 +1033,20 @@ module top #(
     reg [7:0] calc_id_pending;
     
     // Convolution input counter
-    reg [3:0] conv_input_cnt;
 
     // Matrix listing/selection cursors
     reg [2:0] calc_list_cursor;
-    reg [2:0] calc_sel_cursor;
+    // reg [2:0] calc_sel_cursor; // Moved to top
     reg       calc_seen_matrix_busy;
 
     // Prompt + matrix TX for CALC
-    reg       calc_prompt_start;
-    reg [2:0] calc_prompt_sel;
+    // reg       calc_prompt_start; // Moved to top
+    // reg [2:0] calc_prompt_sel;   // Moved to top
     reg       calc_prompt_req;
     reg [2:0] calc_prompt_req_sel;
 
-    reg       calc_send_pulse;
-    wire      calc_matrix_tx_busy;
+    // reg       calc_send_pulse; // Moved to top
+    // wire      calc_matrix_tx_busy; // Moved to top
     reg [31:0] calc_matrix_idle_cnt;
 
     // Two-operand dimension bookkeeping (for compatibility validation)
@@ -841,7 +1067,7 @@ module top #(
     reg [7:0]   calc_result_m;
     reg [7:0]   calc_result_n;
     reg         calc_result_send_pulse;
-    wire        calc_result_tx_busy;
+    // wire        calc_result_tx_busy; // Moved to top
     reg         calc_seen_result_busy;
     reg [31:0]  calc_result_idle_cnt;
 
@@ -879,13 +1105,11 @@ module top #(
     endfunction
 
     // Scalar input via switches
-    wire [3:0] calc_scalar_val;
     reg        rand_scalar_active;
     reg [3:0]  rand_scalar_stored;
     // Physical switch order is reversed for scalar entry: bit-reverse the 4 LSBs.
     // If random scalar is active, use stored random value.
     assign calc_scalar_val = rand_scalar_active ? rand_scalar_stored : {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
-    reg        calc_scalar_disp_en;
 
     // Fake compute word TX ("calc\n")
     reg       calc_word_req;
@@ -893,7 +1117,6 @@ module top #(
     reg [2:0] calc_word_idx;
     reg       calc_word_txStart;
     reg [7:0] calc_word_txData;
-    wire      calc_word_txBusy;
     wire      calc_word_uart_tx;
 
     function automatic [7:0] calc_word_char;
@@ -921,20 +1144,12 @@ module top #(
         .txBusy(calc_word_txBusy)
     );
 
-    wire      calc_op_hold;
-    wire [7:0] calc_op_hold_char;
-
-    // 7-seg override trigger for op letter
-    reg       calc_op_disp_pulse;
-    reg [7:0] calc_op_disp_char;
-
     // Persistent selected op letter for hold display
     reg [7:0] calc_selected_char;
 
     // UART TX (single byte) for op letter
     reg       calc_op_tx_start;
     reg [7:0] calc_op_tx_data;
-    wire      calc_op_tx_busy;
     wire      calc_op_uart_tx;
     reg       calc_op_tx_pending;
     reg [7:0] calc_op_tx_pending_char;
@@ -984,123 +1199,129 @@ module top #(
     );
 
     // CALC prompt TX (reuse existing prompt strings)
-    wire calc_prompt_uart_tx;
-    wire calc_prompt_uart_busy;
+    // wire calc_prompt_uart_tx; // Handled by shared instance
 
-    ShowUartTx #(
-        .CLK_FREQ_HZ(CLK_FREQ_HZ),
-        .BAUD_RATE(115200)
-    ) u_calc_prompt (
-        .clk(clk),
-        .uartTxRstN(rst_n),
-        .sendOne(1'b0),
-        .promptStart(calc_prompt_start),
-        .promptSel(calc_prompt_sel),
-        .uartTx(calc_prompt_uart_tx),
-        .busy(calc_prompt_uart_busy)
-    );
+    // ShowUartTx #(
+    //     .CLK_FREQ_HZ(CLK_FREQ_HZ),
+    //     .BAUD_RATE(115200)
+    // ) u_calc_prompt (
+    //     .clk(clk),
+    //     .uartTxRstN(rst_n),
+    //     .sendOne(1'b0),
+    //     .promptStart(calc_prompt_start),
+    //     .promptSel(calc_prompt_sel),
+    //     .uartTx(calc_prompt_uart_tx),
+    //     .busy(calc_prompt_uart_busy)
+    // );
 
     // CALC matrix TX
-    wire [199:0] calc_matrix_slice;
-    assign calc_matrix_slice = storage_rdata[(calc_sel_cursor * MATRIX_WIDTH) +: MATRIX_WIDTH];
+    // wire [199:0] calc_matrix_slice; // Moved to top
+    assign calc_matrix_slice = storage_rdata;
 
-    wire calc_matrix_uart_tx;
-    wire calc_matrix_busy_wire;
+    // wire calc_matrix_uart_tx; // Handled by shared instance
+    // wire calc_matrix_busy_wire; // Handled by shared instance
 
-    MatrixUartTx u_calc_matrix (
+    // MatrixUartTx u_calc_matrix (
+    //     .clk(clk),
+    //     .uartTxRstN(rst_n),
+    //     .sendOne(calc_send_pulse),
+    //     .matrixData(calc_matrix_slice),
+    //     .m(calc_req_m),
+    //     .n(calc_req_n),
+    //     .id({5'b0, calc_sel_cursor} + 8'd1),
+    //     .ifID(1'b1),
+    //     .ifNM(1'b1),
+    //     .uartTx(calc_matrix_uart_tx),
+    //     .busy(calc_matrix_busy_wire)
+    // );
+
+    // assign calc_matrix_tx_busy = calc_matrix_busy_wire;
+
+    // CALC RX signals
+    reg        calc_nm_start;
+
+    reg        calc_id_start;
+
+    NMUartRx u_calc_nm_rx (
         .clk(clk),
-        .uartTxRstN(rst_n),
-        .sendOne(calc_send_pulse),
-        .matrixData(calc_matrix_slice),
-        .m(calc_req_m),
-        .n(calc_req_n),
-        .id({5'b0, calc_sel_cursor} + 8'd1),
-        .ifID(1'b1),
-        .ifNM(1'b1),
-        .uartTx(calc_matrix_uart_tx),
-        .busy(calc_matrix_busy_wire)
+        .uartRxRstN(rst_n),
+        .rx(uart_rx),
+        .rxStart(calc_nm_start),
+        .matrixListInfo({75{1'b1}}), // Always allow parsing, check existence later
+        .m(calc_nm_m),
+        .n(calc_nm_n),
+        .rxDone(calc_nm_done),
+        .rxError(calc_nm_error)
     );
 
-    assign calc_matrix_tx_busy = calc_matrix_busy_wire;
+    IdUartRx u_calc_id_rx (
+        .clk(clk),
+        .uartRxRstN(rst_n),
+        .rx(uart_rx),
+        .rxStart(calc_id_start),
+        .m(calc_req_m),
+        .n(calc_req_n),
+        .matrixListInfo(matrix_list_info),
+        .id(calc_id_val),
+        .rxDone(calc_id_done),
+        .rxError(calc_id_error)
+    );
 
-    // --------------------
-    // CALC computation (uses Calculation/ units)
-    // --------------------
-    function automatic [199:0] tight_to_padded_5x5;
-        input [199:0] tight;
-        input [2:0] m;
-        input [2:0] n;
-        integer r, c;
-        integer idx_t;
-        integer idx_p;
-        reg [199:0] out;
-        begin
-            out = {200{1'b0}};
-            if (m != 0 && n != 0) begin
-                for (r = 0; r < 5; r = r + 1) begin
-                    for (c = 0; c < 5; c = c + 1) begin
-                        idx_p = (r*5 + c) * 8;
-                        if (r < m && c < n) begin
-                            idx_t = (r*n + c) * 8;
-                            out[idx_p +: 8] = tight[idx_t +: 8];
-                        end else begin
-                            out[idx_p +: 8] = 8'd0;
-                        end
-                    end
-                end
-            end
-            tight_to_padded_5x5 = out;
-        end
-    endfunction
 
-    function automatic [199:0] padded_5x5_to_tight;
-        input [199:0] padded;
-        input [2:0] m;
-        input [2:0] n;
-        integer r, c;
-        integer idx_t;
-        integer idx_p;
-        reg [199:0] out;
-        begin
-            out = {200{1'b0}};
-            if (m != 0 && n != 0) begin
-                for (r = 0; r < 5; r = r + 1) begin
-                    for (c = 0; c < 5; c = c + 1) begin
-                        if (r < m && c < n) begin
-                            idx_t = (r*n + c) * 8;
-                            idx_p = (r*5 + c) * 8;
-                            out[idx_t +: 8] = padded[idx_p +: 8];
-                        end
-                    end
-                end
-            end
-            padded_5x5_to_tight = out;
-        end
-    endfunction
 
-    function automatic [71:0] padded_5x5_to_kernel3x3;
-        input [199:0] padded;
-        integer r, c;
-        integer idx_k;
-        integer idx_p;
-        reg [71:0] out;
-        begin
-            out = {72{1'b0}};
-            for (r = 0; r < 3; r = r + 1) begin
-                for (c = 0; c < 3; c = c + 1) begin
-                    idx_k = (r*3 + c) * 8;
-                    idx_p = (r*5 + c) * 8;
-                    out[idx_k +: 8] = padded[idx_p +: 8];
-                end
-            end
-            padded_5x5_to_kernel3x3 = out;
-        end
-    endfunction
+    // wire [199:0] calc_op1_padded;
+    // wire [199:0] calc_op2_padded;
+    // assign calc_op1_padded = tight_to_padded_5x5(calc_op1_matrix_tight, calc_op1_m[2:0], calc_op1_n[2:0]);
+    // assign calc_op2_padded = tight_to_padded_5x5(calc_op2_matrix_tight, calc_op2_m[2:0], calc_op2_n[2:0]);
 
+    // Since we are using 5x5 fixed storage in MatrixIO now (implied by previous changes to simplify),
+    // we can just pass the data through. If MatrixIO still packs tightly, we need to unpack.
+    // However, to save LUTs, we should assume fixed 5x5 layout or use a simpler unpacking if possible.
+    // Given the previous optimization in MatrixIO was to remove the loop but keep the structure,
+    // let's check MatrixIO again.
+    // Wait, MatrixIO uses `mem[current_scale_idx][scalePtr][elemIdx]`.
+    // And `readData` is `mem[...][...][eIdx]`.
+    // It seems MatrixIO stores 25 elements regardless of M/N?
+    // Yes, `MAX_ELEM = 25`.
+    // So `storage_rdata` is always 200 bits (25 bytes).
+    // If the user inputs a 2x2 matrix, how is it stored?
+    // The `MatrixUartRx` likely packs it.
+    // If we assume the data is ALREADY padded to 5x5 in storage (or we don't care about garbage in unused slots),
+    // we can skip the complex re-shuffling functions.
+    
+    // Let's assume for optimization that we operate on the full 200 bits and mask outputs if needed,
+    // OR that the storage format is already compatible.
+    // Actually, `tight_to_padded` suggests storage is "tight" (row-major, no gaps).
+    // But `MatrixIO` writes `writeData` directly to `mem`.
+    // `MatrixUartRx` produces `matrixData`.
+    
+    // Let's look at `MatrixUartRx`.
+    
     wire [199:0] calc_op1_padded;
     wire [199:0] calc_op2_padded;
-    assign calc_op1_padded = tight_to_padded_5x5(calc_op1_matrix_tight, calc_op1_m[2:0], calc_op1_n[2:0]);
-    assign calc_op2_padded = tight_to_padded_5x5(calc_op2_matrix_tight, calc_op2_m[2:0], calc_op2_n[2:0]);
+    
+    // Optimization: Direct assignment. 
+    // If the calculation units can handle garbage in the padded areas (they usually respect m/n inputs),
+    // then we don't need to reshuffle.
+    // Most units take m/n as inputs.
+    
+    assign calc_op1_padded = calc_op1_matrix_tight;
+    assign calc_op2_padded = calc_op2_matrix_tight;
+
+    // For convolution kernel, we need the first 3x3.
+    // If it's tight packed, 3x3 is just the first 9 bytes?
+    // No, tight packing of 3x3 is: r0c0, r0c1, r0c2, r1c0...
+    // Padded 5x5 is: r0c0..r0c4, r1c0..r1c4...
+    // If `calc_op1_matrix_tight` is TIGHT, then for a 3x3 matrix, it IS the first 9 bytes.
+    // So `padded_5x5_to_kernel3x3` is just taking the first 72 bits?
+    // Wait, `padded_5x5_to_kernel3x3` takes a PADDED input.
+    // If we change `calc_op1_padded` to be TIGHT, then `padded_5x5_to_kernel3x3` needs to change.
+    
+    // Let's redefine the kernel extraction to be simple:
+    // If the input is 3x3, it occupies the first 9 bytes of the tight array.
+    wire [71:0] conv_kernel;
+    assign conv_kernel = calc_op1_padded[71:0]; 
+
 
     // Add
     wire [199:0] add_out_padded;
@@ -1168,13 +1389,12 @@ module top #(
     );
 
     // Convolution
-    wire [71:0]  conv_kernel;
-    assign conv_kernel = padded_5x5_to_kernel3x3(calc_op1_padded);
+    // wire [71:0]  conv_kernel; // Removed duplicate declaration
+    // assign conv_kernel = calc_op1_padded[71:0]; // Removed duplicate assignment
     wire [CONV_RESULT_WIDTH-1:0] conv_out_padded;
     wire [7:0]   conv_m;
     wire [7:0]   conv_n;
     wire conv_valid;
-    wire [15:0] conv_cycles;
     reg calc_compute_start;
 
     ConvolutionUnit u_conv (
@@ -1336,6 +1556,9 @@ module top #(
             calc_scalar_disp_en<= 1'b0;
             calc_force_mode_pulse <= 1'b0;
             calc_result_send_pulse <= 1'b0;
+
+            calc_nm_start      <= 1'b0;
+            calc_id_start      <= 1'b0;
 
             // Alert blink generator (runs only while countdown is active)
             if (mode_state != MODE_CALC) begin
@@ -1503,117 +1726,80 @@ module top #(
                             if (calc_info_uart_busy) begin
                                 calc_info_seen_busy <= 1'b1;
                             end
+                            
                             if (calc_info_seen_busy && !calc_info_uart_busy && !calc_info_req) begin
-                                // After inventory -> prompt wait1 for M
                                 calc_prompt_req     <= 1'b1;
                                 calc_prompt_req_sel <= PROMPT_WAIT1;
-                                calc_flow           <= CALC_FLOW_WAIT1_INPUT;
+                                calc_nm_start       <= 1'b1; // Start NM RX
+                                calc_flow           <= CALC_FLOW_GET_DIMS;
                             end
                         end
 
-                        CALC_FLOW_WAIT1_INPUT: begin
-                            if (rx_done) begin
-                                if (rx_digit_ok) begin
-                                    calc_m_pending <= rx_digit;
-                                    calc_m_ready   <= 1'b1;
-                                    calc_flow      <= CALC_FLOW_WAIT1_CONFIRM;
-                                end
-                            end
-                        end
-
-                        CALC_FLOW_WAIT1_CONFIRM: begin
-                            // Keep showing wait1 state; confirm via button
-                            if (rx_done) begin
-                                if (rx_digit_ok) begin
-                                    calc_m_pending <= rx_digit;
-                                    calc_m_ready   <= 1'b1;
-                                end
-                            end
-                            if (btn_pulse && calc_m_ready) begin
-                                calc_req_m       <= calc_m_pending;
-                                if (calc_operand_idx == 1'b0) begin
-                                    calc_op1_m <= calc_m_pending;
-                                end else begin
-                                    calc_op2_m <= calc_m_pending;
-                                end
-
-                                // During countdown window, the first confirm counts as "started re-entry".
-                                // Cancel the countdown immediately.
-                                if (calc_countdown_en_r) begin
-                                    calc_countdown_en_r  <= 1'b0;
-                                    calc_countdown_sec_r <= 5'd0;
-                                    calc_countdown_cnt_r <= 32'd0;
-                                end
-
-                                calc_m_ready     <= 1'b0;
-                                calc_prompt_req  <= 1'b1;
-                                calc_prompt_req_sel <= PROMPT_WAIT2;
-                                calc_flow        <= CALC_FLOW_WAIT2_INPUT;
-                            end
-                        end
-
-                        CALC_FLOW_WAIT2_INPUT: begin
-                            if (rx_done) begin
-                                if (rx_digit_ok) begin
-                                    calc_n_pending <= rx_digit;
-                                    calc_n_ready   <= 1'b1;
-                                    calc_flow      <= CALC_FLOW_WAIT2_CONFIRM;
-                                end
-                            end
-                        end
-
-                        CALC_FLOW_WAIT2_CONFIRM: begin
-                            if (rx_done) begin
-                                if (rx_digit_ok) begin
-                                    calc_n_pending <= rx_digit;
-                                    calc_n_ready   <= 1'b1;
-                                end
-                            end
-                            if (btn_pulse && calc_n_ready) begin
-                                calc_req_n       <= calc_n_pending;
-                                if (calc_operand_idx == 1'b0) begin
-                                    calc_op1_n <= calc_n_pending;
-                                end else begin
-                                    calc_op2_n <= calc_n_pending;
-                                end
-                                calc_n_ready     <= 1'b0;
-
-                                // For two-operand ops, after we have both dimensions, validate compatibility.
-                                // If invalid: start/restart 10s countdown, blink LEDs continuously,
-                                // and force returning to operand selection start (user can re-enter within countdown).
-                                if (calc_need_second && (calc_operand_idx == 1'b1)) begin
-                                    if (!calc_dims_ok(calc_state, calc_op1_m, calc_op1_n, calc_op2_m, calc_n_pending)) begin
-                                        calc_countdown_en_r  <= 1'b1;
-                                        calc_countdown_sec_r <= 5'd10;
-                                        calc_countdown_cnt_r <= 32'd0;
-
-                                        calc_operand_idx <= 1'b0;
-                                        calc_m_ready     <= 1'b0;
-                                        calc_n_ready     <= 1'b0;
-                                        calc_id_ready    <= 1'b0;
-                                        calc_prompt_req     <= 1'b1;
-                                        calc_prompt_req_sel <= PROMPT_WAIT1;
-                                        calc_flow        <= CALC_FLOW_WAIT1_INPUT;
-                                        calc_prep_timer  <= 2'd0;
+                        CALC_FLOW_GET_DIMS: begin
+                            if (calc_nm_done) begin
+                                if (!calc_nm_error) begin
+                                    // Latch M and N
+                                    calc_req_m <= calc_nm_m;
+                                    calc_req_n <= calc_nm_n;
+                                    calc_m_pending <= calc_nm_m;
+                                    calc_n_pending <= calc_nm_n;
+                                    
+                                    if (calc_operand_idx == 1'b0) begin
+                                        calc_op1_m <= calc_nm_m;
+                                        calc_op1_n <= calc_nm_n;
                                     end else begin
-                                        // Valid dims -> proceed
-                                        calc_prompt_req  <= 1'b1;
-                                        calc_prompt_req_sel <= PROMPT_DISPLAY;
-                                        calc_flow        <= CALC_FLOW_PREP;
-                                        calc_prep_timer  <= 2'd0;
+                                        calc_op2_m <= calc_nm_m;
+                                        calc_op2_n <= calc_nm_n;
+                                    end
+
+                                    // Cancel countdown if active (re-entry started)
+                                    if (calc_countdown_en_r) begin
                                         calc_countdown_en_r  <= 1'b0;
                                         calc_countdown_sec_r <= 5'd0;
                                         calc_countdown_cnt_r <= 32'd0;
                                     end
+
+                                    // Compatibility check for 2nd operand
+                                    if (calc_need_second && (calc_operand_idx == 1'b1)) begin
+                                        if (!calc_dims_ok(calc_state, calc_op1_m, calc_op1_n, calc_nm_m, calc_nm_n)) begin
+                                            // Invalid dims -> Error/Countdown
+                                            calc_countdown_en_r  <= 1'b1;
+                                            calc_countdown_sec_r <= 5'd10;
+                                            calc_countdown_cnt_r <= 32'd0;
+
+                                            calc_operand_idx <= 1'b0;
+                                            calc_prompt_req     <= 1'b1;
+                                            calc_prompt_req_sel <= PROMPT_WAIT1;
+                                            calc_nm_start       <= 1'b1; // Restart RX
+                                            calc_flow        <= CALC_FLOW_GET_DIMS;
+                                            calc_prep_timer  <= 2'd0;
+                                        end else begin
+                                            // Valid -> Proceed
+                                            calc_prompt_req  <= 1'b1;
+                                            calc_prompt_req_sel <= PROMPT_DISPLAY;
+                                            calc_flow        <= CALC_FLOW_PREP;
+                                            calc_prep_timer  <= 2'd0;
+                                            calc_countdown_en_r  <= 1'b0;
+                                            calc_countdown_sec_r <= 5'd0;
+                                            calc_countdown_cnt_r <= 32'd0;
+                                        end
+                                    end else begin
+                                        // First operand -> Proceed
+                                        calc_prompt_req  <= 1'b1;
+                                        calc_prompt_req_sel <= PROMPT_DISPLAY;
+                                        calc_flow        <= CALC_FLOW_PREP;
+                                        calc_prep_timer  <= 2'd0;
+                                    end
                                 end else begin
-                                    // Single-operand / first operand path
-                                    calc_prompt_req  <= 1'b1;
-                                    calc_prompt_req_sel <= PROMPT_DISPLAY;
-                                    calc_flow        <= CALC_FLOW_PREP;
-                                    calc_prep_timer  <= 2'd0;
+                                    // Error -> Retry
+                                    calc_prompt_req     <= 1'b1;
+                                    calc_prompt_req_sel <= PROMPT_WAIT1;
+                                    calc_nm_start       <= 1'b1; // Restart RX
+                                    calc_flow           <= CALC_FLOW_GET_DIMS;
                                 end
                             end
                         end
+
 
                         CALC_FLOW_PREP: begin
                             // Wait a few cycles for matrixIO to settle after setting dims.
@@ -1623,7 +1809,8 @@ module top #(
                                 if (storage_count == 3'd0) begin
                                     calc_prompt_req     <= 1'b1;
                                     calc_prompt_req_sel <= PROMPT_WAIT1;
-                                    calc_flow           <= CALC_FLOW_WAIT1_INPUT;
+                                    calc_nm_start       <= 1'b1; // Restart RX
+                                    calc_flow           <= CALC_FLOW_GET_DIMS;
                                     calc_prep_timer     <= 2'd0;
                                 end else begin
                                     calc_list_cursor <= 3'd0;
@@ -1636,15 +1823,19 @@ module top #(
                         CALC_FLOW_LIST_ARM: begin
                             // Send all matrices for this dimension with their IDs
                             if (calc_list_cursor >= storage_count) begin
-                                calc_flow      <= CALC_FLOW_SEL_INPUT;
-                                calc_id_ready  <= 1'b0;
+                                calc_flow      <= CALC_FLOW_GET_ID;
+                                calc_id_start  <= 1'b1; // Start ID RX
                             end else if (!calc_matrix_tx_busy && !calc_prompt_req && !mode_uart_busy &&
                                          !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy) begin
                                 calc_sel_cursor <= calc_list_cursor;
-                                calc_send_pulse <= 1'b1;
-                                calc_seen_matrix_busy <= 1'b0;
-                                calc_flow       <= CALC_FLOW_LIST_WAIT;
+                                calc_flow       <= CALC_FLOW_LIST_SEND;
                             end
+                        end
+
+                        CALC_FLOW_LIST_SEND: begin
+                            calc_send_pulse <= 1'b1;
+                            calc_seen_matrix_busy <= 1'b0;
+                            calc_flow       <= CALC_FLOW_LIST_WAIT;
                         end
 
                         CALC_FLOW_LIST_WAIT: begin
@@ -1657,8 +1848,8 @@ module top #(
                             end
                         end
 
-                        CALC_FLOW_SEL_INPUT: begin
-                            // User types matrix id (1..5), then confirms with button
+                        CALC_FLOW_GET_ID: begin
+                            // User types matrix id (1..5)
                             if (rand_detected) begin
                                 rand_max_val    <= {5'd0, storage_count} - 8'd1; // 0..(count-1)
                                 rand_gen_enable <= 1'b1;
@@ -1667,37 +1858,21 @@ module top #(
                                 rand_gen_enable <= 1'b0;
                                 calc_wait_rand  <= 1'b0;
                                 // Use first byte of random data. Add 1 to get 1..count
+                                calc_sel_cursor <= rand_data_flat[2:0]; // 0..count-1
                                 calc_id_pending <= rand_data_flat[7:0] + 8'd1;
-                                calc_id_ready   <= 1'b1;
-                                calc_flow       <= CALC_FLOW_SEL_CONFIRM;
-                            end else if (rx_done) begin
-                                if (rx_digit_ok) begin
-                                    calc_id_pending <= rx_digit;
-                                    calc_id_ready   <= 1'b1;
-                                    calc_flow       <= CALC_FLOW_SEL_CONFIRM;
+                                calc_flow       <= CALC_FLOW_SHOW_ONE_ARM;
+                            end else if (calc_id_done) begin
+                                if (!calc_id_error) begin
+                                    calc_sel_cursor <= calc_id_val[2:0] - 3'd1;
+                                    calc_id_pending <= calc_id_val;
+                                    calc_flow       <= CALC_FLOW_SHOW_ONE_ARM;
+                                end else begin
+                                    // Error -> Retry
+                                    calc_id_start <= 1'b1; // Restart RX
                                 end
                             end
                         end
 
-                        CALC_FLOW_SEL_CONFIRM: begin
-                            if (rx_done) begin
-                                if (rx_digit_ok) begin
-                                    calc_id_pending <= rx_digit;
-                                    calc_id_ready   <= 1'b1;
-                                end
-                            end
-                            if (btn_pulse && calc_id_ready) begin
-                                // Clamp to existing range; if invalid, stay
-                                if (calc_id_pending >= 8'd1 && calc_id_pending <= storage_count) begin
-                                    calc_sel_cursor <= calc_id_pending[2:0] - 3'd1;
-                                    calc_id_ready   <= 1'b0;
-                                    calc_flow       <= CALC_FLOW_SHOW_ONE_ARM;
-                                end else begin
-                                    calc_id_ready <= 1'b0;
-                                    calc_flow     <= CALC_FLOW_SEL_INPUT;
-                                end
-                            end
-                        end
 
                         CALC_FLOW_SHOW_ONE_ARM: begin
                             if (!calc_matrix_tx_busy && !calc_result_tx_busy && !calc_prompt_req && !mode_uart_busy &&
@@ -1730,7 +1905,8 @@ module top #(
                                     calc_id_ready    <= 1'b0;
                                     calc_prompt_req     <= 1'b1;
                                     calc_prompt_req_sel <= PROMPT_WAIT1;
-                                    calc_flow        <= CALC_FLOW_WAIT1_INPUT;
+                                    calc_nm_start       <= 1'b1; // Restart RX
+                                    calc_flow           <= CALC_FLOW_GET_DIMS;
                                 end else begin
                                     calc_flow <= CALC_FLOW_COMPUTE_LATCH;
                                     calc_compute_start <= 1'b1;
@@ -1793,7 +1969,8 @@ module top #(
                                 if (calc_state == CALC_OP_CONV) begin
                                     calc_result_matrix_tight <= calc_res_padded;
                                 end else begin
-                                    calc_result_matrix_tight <= {{CONV_RESULT_WIDTH-200{1'b0}}, padded_5x5_to_tight(calc_res_padded[199:0], calc_res_m[2:0], calc_res_n[2:0])};
+                                    // Simplified: assume tight packing is just the data
+                                    calc_result_matrix_tight <= calc_res_padded;
                                 end
                                 calc_flow <= CALC_FLOW_RESULT_SEND_ARM;
                                 calc_compute_start <= 1'b0;
@@ -1805,7 +1982,8 @@ module top #(
                                     calc_prompt_req     <= 1'b1;
                                     calc_prompt_req_sel <= PROMPT_WAIT1;
                                     calc_operand_idx    <= 1'b0;
-                                    calc_flow           <= CALC_FLOW_WAIT1_INPUT;
+                                    calc_nm_start       <= 1'b1; // Restart RX
+                                    calc_flow           <= CALC_FLOW_GET_DIMS;
                                     calc_compute_start <= 1'b0;
                                 end
                             end
@@ -1913,9 +2091,10 @@ module top #(
     // --------------------
     localparam GEN_IDLE          = 4'd0;
     localparam GEN_ENTRY_WAIT1   = 4'd1;
-    localparam GEN_WAIT_M        = 4'd2;
-    localparam GEN_WAIT_N        = 4'd3;
-    localparam GEN_WAIT_K        = 4'd4;
+    localparam GEN_WAIT_INPUT    = 4'd2; // Replaces WAIT_M/N/K
+    // localparam GEN_WAIT_M        = 4'd2;
+    // localparam GEN_WAIT_N        = 4'd3;
+    // localparam GEN_WAIT_K        = 4'd4;
     localparam GEN_GEN_PULSE     = 4'd5;
     localparam GEN_GEN_CAPTURE   = 4'd6;
     localparam GEN_SEND_GENWORD  = 4'd7;
@@ -1928,12 +2107,12 @@ module top #(
     reg [2:0] gen_gen_idx;
     reg [2:0] gen_send_idx;
 
-    reg       gen_prompt_start;
-    reg [2:0] gen_prompt_sel;
+    // reg       gen_prompt_start; // Moved to top
+    // reg [2:0] gen_prompt_sel;   // Moved to top
     reg       gen_prompt_req;
     reg [2:0] gen_prompt_req_sel;
 
-    reg       gen_send_pulse;
+    // reg       gen_send_pulse; // Moved to top
     reg       gen_seen_matrix_busy;
 
     // Random generator control
@@ -1944,13 +2123,26 @@ module top #(
     reg [199:0] gen_buf [0:4];
 
     // GEN TX modules signals
-    wire gen_prompt_uart_tx;
-    wire gen_prompt_uart_busy;
-    wire gen_matrix_uart_tx;
-    wire gen_matrix_busy_wire;
-    wire gen_tx_busy;
+    // wire gen_prompt_uart_tx; // Moved to top
+    // wire gen_matrix_uart_tx; // Moved to top
 
     assign gen_tx_busy = gen_prompt_uart_busy || gen_matrix_busy_wire;
+
+    // GEN RX module signals
+    reg        gen_rx_start;
+
+    GenerationUartRx u_gen_rx (
+        .clk(clk),
+        .uartRxRstN(rst_n),
+        .rx(uart_rx),
+        .rxStart(gen_rx_start),
+        .cntLimit({5'd0, user_max_limit}),
+        .m(gen_rx_m),
+        .n(gen_rx_n),
+        .cnt(gen_rx_cnt),
+        .rxDone(gen_rx_done),
+        .rxError(gen_rx_error)
+    );
 
     // 请确保你有 random.v
     random u_rand (
@@ -1961,18 +2153,18 @@ module top #(
         .readData(rand_matrix)
     );
 
-    ShowUartTx #(
-        .CLK_FREQ_HZ(CLK_FREQ_HZ),
-        .BAUD_RATE(115200)
-    ) u_gen_prompt (
-        .clk(clk),
-        .uartTxRstN(rst_n),
-        .sendOne(1'b0),
-        .promptStart(gen_prompt_start),
-        .promptSel(gen_prompt_sel),
-        .uartTx(gen_prompt_uart_tx),
-        .busy(gen_prompt_uart_busy)
-    );
+    // ShowUartTx #(
+    //     .CLK_FREQ_HZ(CLK_FREQ_HZ),
+    //     .BAUD_RATE(115200)
+    // ) u_gen_prompt (
+    //     .clk(clk),
+    //     .uartTxRstN(rst_n),
+    //     .sendOne(1'b0),
+    //     .promptStart(gen_prompt_start),
+    //     .promptSel(gen_prompt_sel),
+    //     .uartTx(gen_prompt_uart_tx),
+    //     .busy(gen_prompt_uart_busy)
+    // );
 
     function automatic [199:0] sel_gen_buf;
         input [2:0] idx;
@@ -1992,24 +2184,24 @@ module top #(
 
     // MatrixUartTx reads matrixData continuously while busy; keep its inputs
     // stable for the entire transmission by latching before sendOne.
-    reg [199:0] gen_matrix_latched;
-    reg [7:0]   gen_m_latched;
-    reg [7:0]   gen_n_latched;
-    reg [7:0]   gen_id_latched;
+    // reg [199:0] gen_matrix_latched; // Moved to top
+    // reg [7:0]   gen_m_latched;      // Moved to top
+    // reg [7:0]   gen_n_latched;      // Moved to top
+    // reg [7:0]   gen_id_latched;     // Moved to top
 
-    MatrixUartTx u_gen_matrix (
-        .clk(clk),
-        .uartTxRstN(rst_n),
-        .sendOne(gen_send_pulse),
-        .matrixData(gen_matrix_latched),
-        .m(gen_m_latched),
-        .n(gen_n_latched),
-        .id(gen_id_latched),
-        .ifID(1'b1),
-        .ifNM(1'b1),
-        .uartTx(gen_matrix_uart_tx),
-        .busy(gen_matrix_busy_wire)
-    );
+    // MatrixUartTx u_gen_matrix (
+    //     .clk(clk),
+    //     .uartTxRstN(rst_n),
+    //     .sendOne(gen_send_pulse),
+    //     .matrixData(gen_matrix_latched),
+    //     .m(gen_m_latched),
+    //     .n(gen_n_latched),
+    //     .id(gen_id_latched),
+    //     .ifID(1'b1),
+    //     .ifNM(1'b1),
+    //     .uartTx(gen_matrix_uart_tx),
+    //     .busy(gen_matrix_busy_wire)
+    // );
 
     // GEN controller FSM
     integer gi;
@@ -2032,9 +2224,13 @@ module top #(
             gen_write_dimX     <= 8'd1;
             gen_write_dimY     <= 8'd1;
             gen_write_wdata    <= {MATRIX_WIDTH{1'b0}};
-            for (gi = 0; gi < 5; gi = gi + 1) begin
-                gen_buf[gi] <= {MATRIX_WIDTH{1'b0}};
-            end
+            // Removed loop for LUT optimization
+            gen_buf[0] <= {MATRIX_WIDTH{1'b0}};
+            gen_buf[1] <= {MATRIX_WIDTH{1'b0}};
+            gen_buf[2] <= {MATRIX_WIDTH{1'b0}};
+            gen_buf[3] <= {MATRIX_WIDTH{1'b0}};
+            gen_buf[4] <= {MATRIX_WIDTH{1'b0}};
+            
             gen_matrix_latched <= {MATRIX_WIDTH{1'b0}};
             gen_m_latched      <= 8'd1;
             gen_n_latched      <= 8'd1;
@@ -2044,6 +2240,7 @@ module top #(
             gen_prompt_start <= 1'b0;
             gen_write_req    <= 1'b0;
             rand_enable      <= 1'b0;
+            gen_rx_start     <= 1'b0;
 
             // If we leave GEN mode, cancel pending prompt requests
             if (mode_state != MODE_GEN) begin
@@ -2066,60 +2263,31 @@ module top #(
                     end else if (!gen_prompt_req && !gen_prompt_uart_busy) begin
                         gen_prompt_req     <= 1'b1;
                         gen_prompt_req_sel <= PROMPT_WAIT1;
-                        gen_state          <= GEN_WAIT_M;
+                        gen_rx_start       <= 1'b1; // Start RX
+                        gen_state          <= GEN_WAIT_INPUT;
                     end
                 end
 
-                GEN_WAIT_M: begin
+                GEN_WAIT_INPUT: begin
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
-                    end else if (rx_done) begin
-                        if (rx_digit_ok) begin
-                            gen_m <= rx_digit;
-                            gen_prompt_req     <= 1'b1;
-                            gen_prompt_req_sel <= PROMPT_WAIT2;
-                            gen_state          <= GEN_WAIT_N;
-                        end else if (!rx_is_ignore) begin
-                            gen_prompt_req     <= 1'b1;
-                            gen_prompt_req_sel <= PROMPT_WAIT1;
-                            gen_state          <= GEN_WAIT_M;
-                        end
-                    end
-                end
-
-                GEN_WAIT_N: begin
-                    if (mode_state != MODE_GEN) begin
-                        gen_state <= GEN_IDLE;
-                    end else if (rx_done) begin
-                        if (rx_digit_ok) begin
-                            gen_n <= rx_digit;
-                            gen_prompt_req     <= 1'b1;
-                            gen_prompt_req_sel <= PROMPT_WAIT3;
-                            gen_state          <= GEN_WAIT_K;
-                        end else if (!rx_is_ignore) begin
-                            gen_prompt_req     <= 1'b1;
-                            gen_prompt_req_sel <= PROMPT_WAIT2;
-                            gen_state          <= GEN_WAIT_N;
-                        end
-                    end
-                end
-
-                GEN_WAIT_K: begin
-                    if (mode_state != MODE_GEN) begin
-                        gen_state <= GEN_IDLE;
-                    end else if (rx_done) begin
-                        if ((rx_digit >= 8'd1) && (rx_digit <= {5'd0, user_max_limit})) begin
-                            gen_k       <= rx_digit;
+                    end else if (gen_rx_done) begin
+                        if (!gen_rx_error) begin
+                            gen_m <= gen_rx_m;
+                            gen_n <= gen_rx_n;
+                            gen_k <= gen_rx_cnt;
                             gen_gen_idx <= 3'd0;
                             gen_send_idx<= 3'd0;
                             gen_state   <= GEN_GEN_PULSE;
-                        end else if (!rx_is_ignore) begin
+                        end else begin
+                            // Error -> Retry (re-prompt)
                             gen_prompt_req     <= 1'b1;
-                            gen_prompt_req_sel <= PROMPT_WAIT3;
-                            gen_state          <= GEN_WAIT_K;
+                            gen_prompt_req_sel <= PROMPT_WAIT1;
+                            gen_state          <= GEN_ENTRY_WAIT1; // Will trigger start again
                         end
                     end
                 end
+
 
                 GEN_GEN_PULSE: begin
                     if (mode_state != MODE_GEN) begin
@@ -2158,8 +2326,7 @@ module top #(
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
                     end else if (!gen_prompt_req && !gen_prompt_uart_busy) begin
-                        gen_send_idx <= 3'd0;
-                        gen_state    <= GEN_SEND_ARM;
+                        gen_state <= GEN_SEND_ARM;
                     end
                 end
 
@@ -2168,9 +2335,7 @@ module top #(
                         gen_state <= GEN_IDLE;
                     end else if (gen_send_idx >= gen_k[2:0]) begin
                         // Done; restart for next input
-                        gen_prompt_req     <= 1'b1;
-                        gen_prompt_req_sel <= PROMPT_WAIT1;
-                        gen_state          <= GEN_WAIT_M;
+                        gen_state          <= GEN_ENTRY_WAIT1;
                     end else if (!gen_tx_busy && !gen_prompt_req && !mode_uart_busy) begin
                         gen_matrix_latched <= sel_gen_buf(gen_send_idx);
                         gen_m_latched      <= gen_m;
@@ -2239,33 +2404,23 @@ module top #(
     assign err_calc_op_sel = (mode_state == MODE_CALC) && (calc_state == CALC_WAIT_OP) &&
                              btn_pulse && !mode_sw_valid_onehot;
 
-    wire rx_is_rand_char;
-    assign rx_is_rand_char = (rx_data == "r") || (rx_data == "a") || (rx_data == "n") || (rx_data == "d");
+    // GEN: invalid UART digit during M/N/K entry.
+    assign err_gen_digit = (mode_state == MODE_GEN) && (gen_state == GEN_WAIT_INPUT) && gen_rx_done && gen_rx_error;
 
     // CALC: invalid UART digit during dimension / id entry (non-ignored, not 1..5).
     assign err_calc_uart_digit = (mode_state == MODE_CALC) &&
-                                 rx_done && !rx_digit_ok && !rx_is_ignore &&
                                  (
-                                    ((calc_flow == CALC_FLOW_WAIT1_INPUT)   || (calc_flow == CALC_FLOW_WAIT1_CONFIRM) ||
-                                     (calc_flow == CALC_FLOW_WAIT2_INPUT)   || (calc_flow == CALC_FLOW_WAIT2_CONFIRM))
+                                    ((calc_flow == CALC_FLOW_GET_DIMS) && calc_nm_done && calc_nm_error)
                                     ||
-                                    (((calc_flow == CALC_FLOW_SEL_INPUT)     || (calc_flow == CALC_FLOW_SEL_CONFIRM)) && !rx_is_rand_char)
+                                    ((calc_flow == CALC_FLOW_GET_ID) && calc_id_done && calc_id_error)
                                  );
 
     // CALC: invalid matrix id confirm (out of current storage_count range).
-    assign err_calc_id_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SEL_CONFIRM) &&
-                               btn_pulse && calc_id_ready &&
-                               !((calc_id_pending >= 8'd1) && (calc_id_pending <= storage_count));
+    assign err_calc_id_range = 1'b0; // Handled by IdUartRx
 
     // CALC: invalid scalar confirm (>9 shows 'E' on 7-seg; confirm should error but not accept).
     assign err_calc_scalar_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SCALAR_WAIT) &&
                                    btn_pulse && (calc_scalar_val > 4'd9);
-
-    // GEN: invalid UART digit during M/N/K entry.
-    assign err_gen_digit = (mode_state == MODE_GEN) &&
-                           ((gen_state == GEN_WAIT_M) || (gen_state == GEN_WAIT_N) || (gen_state == GEN_WAIT_K)) &&
-                           rx_done && !rx_is_ignore &&
-                           !((gen_state == GEN_WAIT_K) ? ((rx_digit >= 8'd1) && (rx_digit <= {5'd0, user_max_limit})) : rx_digit_ok);
 
     assign error_pulse = err_default_mode_sel || err_show_dim || err_calc_op_sel ||
                          err_calc_uart_digit || err_calc_id_range || err_calc_scalar_range || err_gen_digit || setup_error_pulse;
@@ -2295,18 +2450,18 @@ module top #(
                 wire calc_uart_sel_result;
                 assign calc_uart_sel_result = calc_result_tx_busy || calc_result_send_pulse;
 
-          assign uart_tx = (mode_state == MODE_SHOW)
-                                     ? (show_uart_sel_info ? show_info_uart_tx
-                                         : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx))
-                   : (mode_state == MODE_GEN)
-                   ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx)
-                   : (mode_state == MODE_CALC)
-                         ? (calc_uart_sel_info   ? calc_info_uart_tx
-                             : (calc_uart_sel_prompt ? calc_prompt_uart_tx
-                                 : (calc_uart_sel_word ? calc_word_uart_tx
-                                     : (calc_uart_sel_op ? calc_op_uart_tx
-                                         : (calc_uart_sel_result ? calc_result_uart_tx
-                                             : (calc_matrix_tx_busy ? calc_matrix_uart_tx : mode_uart_tx))))))
-                   : mode_uart_tx;
+    wire store_uart_sel_matrix;
+    assign store_uart_sel_matrix = shared_matrix_busy || store_send_pulse || (store_state_fsm == STORE_WAIT && !store_seen_matrix_busy);
+
+    assign uart_tx = (mode_state == MODE_SHOW) ? (show_uart_sel_info ? show_info_uart_tx : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)) :
+                     (mode_state == MODE_GEN)  ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx) :
+                     (mode_state == MODE_STORE)? (store_uart_sel_matrix ? matrix_uart_tx : mode_uart_tx) :
+                     (mode_state == MODE_CALC) ? (calc_uart_sel_info ? calc_info_uart_tx :
+                                                 (calc_uart_sel_prompt ? calc_prompt_uart_tx :
+                                                 (calc_uart_sel_word ? calc_word_uart_tx :
+                                                 (calc_uart_sel_op ? calc_op_uart_tx :
+                                                 (calc_uart_sel_result ? calc_result_uart_tx :
+                                                 (calc_matrix_tx_busy ? calc_matrix_uart_tx : mode_uart_tx)))))) :
+                     mode_uart_tx;
 
 endmodule
