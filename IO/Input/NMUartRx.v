@@ -25,7 +25,7 @@ module NMUartRx (// put \n as end
     input wire uartRxRstN,
     input wire rx, 
     input wire rxStart,
-    input wire an,
+    input wire an;
     input wire [74:0] matrixListInfo,
     output reg [7:0] m,
     output reg [7:0] n,
@@ -95,33 +95,15 @@ module NMUartRx (// put \n as end
                 rxError <= 1'b1;
                 isBusy <= 1'b0;
             end
-        end else if(checkBlank(rxData)) begin
+        end else if(checkLineFeed(rxData)) begin
             if(num >= lower && num <= upper) begin
-                isDone = 1'b1;
+                //if(isM && ((matrixListInfo>>(((m-1)*5+n-1)*3))&3'b111)>0) begin
+                isDone = 1'b1; 
             end else begin
                 rxError <= 1'b1;
                 isBusy <= 1'b0;
-            end
-        end else if(checkLineFeed(rxData)) begin
-            if(num >= lower && num <= upper) begin
-                if(isM && ((matrixListInfo>>(((m-1)*5+n-1)*3))&3'b111)>0) begin
-                    //[((m-1)*5+n)*3-1:((m-1)*5+n-1)*3]
-                    rxError <= 1'b0;
-                    isM <= 1'b0;
-                    isN <= 1'b0;
-                    isDone = 1'b1;
-                end else begin
-                    rxError <= 1'b1;
-                    rxDone <= 1'b1;
-                end
-            end else begin
-                rxError <= 1'b1;
                 rxDone <= 1'b1;
             end
-            isBusy <= 1'b0;
-        end else begin
-            rxError <= 1'b1;
-            isBusy <= 1'b0;
         end
     end
     endtask
@@ -148,15 +130,6 @@ module NMUartRx (// put \n as end
                 rxError <= 1'b0;
                 isNum <= 1'b0;
                 num <= 8'b0;
-            end else if(!isBusy && rxError) begin
-                if(rxDoneWire && checkLineFeed(rxData)) begin
-                    rxDone <= 1'b1;
-                    isBusy <= 1'b0;
-                    isM <= 1'b0;
-                    isN <= 1'b0;
-                    isNum <= 1'b0;
-                    num <= 8'b0;
-                end
             end else if(isBusy && an && isNum) begin
                 if(!isM) begin
                     m <= num;
@@ -173,12 +146,6 @@ module NMUartRx (// put \n as end
                 end
             end else if(isBusy && rxDoneWire) begin
                 getNum(num,isNum,8'd1,8'd5);
-                if(isNum) begin
-                    if(!checkLineFeed(rxData)) begin
-                        rxError <= 1'b1;
-                        isBusy <= 1'b0;
-                    end
-                end
             end
         end
     end
