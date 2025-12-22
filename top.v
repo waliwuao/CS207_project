@@ -195,7 +195,7 @@ module top #(
         end
     endfunction
 
-    // 请确保你有 debouncer.v
+    // 璇风‘淇濅綘鏈� debouncer.v
     debouncer #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_db (
@@ -205,7 +205,7 @@ module top #(
         .key_flag(btn_pulse)
     );
 
-    // 请确保你有 error_blink.v
+    // 璇风‘淇濅綘鏈� error_blink.v
     error_blink #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BLINK_HZ(BLINK_HZ)
@@ -365,7 +365,7 @@ module top #(
         end
     end
 
-    // 请确保你有 led_display.v
+    // 璇风‘淇濅綘鏈� led_display.v
     wire alert_active;
     wire alert_blink_bit;
     wire [7:0] led_out_wire;
@@ -415,7 +415,7 @@ module top #(
     // UART RX for SHOW input
     // --------------------
 
-    // 请确保你有 UartRx.v
+    // 璇风‘淇濅綘鏈� UartRx.v
     UartRx #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_rx (
@@ -577,7 +577,7 @@ module top #(
                            (storage_read_idx == 3'd1) ? storage_rdata_all[399:200] :
                            (storage_read_idx == 3'd2) ? storage_rdata_all[599:400] : {MATRIX_WIDTH{1'b0}};
 
-    // 请确保你有 matrixIO.v
+    // 璇风‘淇濅綘鏈� matrixIO.v
     matrixIO u_matrix_store (
         .clk(clk),
         .rst(storage_rst),
@@ -707,7 +707,7 @@ module top #(
                 SHOW_IDLE: begin
                     show_cursor <= 3'd0;
                     prep_timer  <= 2'd0;
-                    // 【关键修改】必须等待 mode_uart_busy 结束，否则 SHOW 消息会被覆盖
+                    // 銆愬叧閿慨鏀广�戝繀椤荤瓑寰� mode_uart_busy 缁撴潫锛屽惁鍒� SHOW 娑堟伅浼氳瑕嗙洊
                     if (mode_state == MODE_SHOW && !mode_uart_busy) begin
                         // Entry point: Request "show" then "wait1"
                         prompt_req     <= 1'b1;
@@ -1001,7 +1001,7 @@ module top #(
 
     wire mode_uart_tx;
 
-    // 请确保你有 ModeUartNotifier.v
+    // 璇风‘淇濅綘鏈� ModeUartNotifier.v
     ModeUartNotifier #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ)
     ) u_mode_uart (
@@ -1997,7 +1997,7 @@ module top #(
                                 calc_seen_result_busy <= 1'b0;
                                 calc_flow <= CALC_FLOW_RESULT_SEND_WAIT;
                             end
-                        enda
+                        end
 
                         CALC_FLOW_RESULT_SEND_WAIT: begin
                             if (calc_result_tx_busy) begin
@@ -2145,10 +2145,10 @@ module top #(
         .rxError(gen_rx_error)
     );
 
-    // 请确保你有 random.v
+    // 璇风‘淇濅綘鏈� random.v
     random u_rand (
         .clk(clk),
-        .rst(storage_rst),
+        .rst(~rst_n),
         .genEnable(rand_enable),
         .max_val(8'd9),
         .readData(rand_matrix)
@@ -2251,7 +2251,7 @@ module top #(
 
             case (gen_state)
                 GEN_IDLE: begin
-                    // 【关键修改】必须等待 mode_uart_busy 结束，否则 GEN 消息会被覆盖
+                    // 銆愬叧閿慨鏀广�戝繀椤荤瓑寰� mode_uart_busy 缁撴潫锛屽惁鍒� GEN 娑堟伅浼氳瑕嗙洊
                     if (mode_state == MODE_GEN && !mode_uart_busy) begin
                         gen_prompt_req     <= 1'b1;
                         gen_prompt_req_sel <= PROMPT_GENERATE;
@@ -2455,7 +2455,6 @@ module top #(
     wire store_uart_sel_matrix;
     assign store_uart_sel_matrix = shared_matrix_busy || store_send_pulse || (store_state_fsm == STORE_WAIT && !store_seen_matrix_busy);
 
-    // 【关键修改】mode_uart_busy 优先级最高，保证 GEN/SHOW 状态名能够发出去
     assign uart_tx = mode_uart_busy ? mode_uart_tx :
                      (mode_state == MODE_SHOW) ? (show_uart_sel_info ? show_info_uart_tx : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)) :
                      (mode_state == MODE_GEN)  ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx) :
