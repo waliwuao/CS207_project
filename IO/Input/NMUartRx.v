@@ -25,6 +25,7 @@ module NMUartRx (// put \n as end
     input wire uartRxRstN,
     input wire rx, 
     input wire rxStart,
+    input wire an,
     input wire [74:0] matrixListInfo,
     output reg [7:0] m,
     output reg [7:0] n,
@@ -58,8 +59,9 @@ module NMUartRx (// put \n as end
         .rxDone(rxDoneWire)
     );
 
-    reg isM,isN;
+    reg isM,isN,isNum;
     reg isBusy;
+    reg [7:0] num;
 
     function [0:0] checkNum;
     input [7:0] a;
@@ -110,11 +112,12 @@ module NMUartRx (// put \n as end
                     isDone = 1'b1;
                 end else begin
                     rxError <= 1'b1;
+                    rxDone <= 1'b1;
                 end
             end else begin
                 rxError <= 1'b1;
+                rxDone <= 1'b1;
             end
-            rxDone <= 1'b1;
             isBusy <= 1'b0;
         end else begin
             rxError <= 1'b1;
@@ -132,6 +135,8 @@ module NMUartRx (// put \n as end
             isBusy <= 1'b0;
             isM <= 1'b0;
             isN <= 1'b0;
+            num <= 8'b0;
+            isNum <= 1'b0;
         end else begin
             rxDone <= 1'b0;
             if (rxStart && !isBusy) begin
@@ -141,25 +146,37 @@ module NMUartRx (// put \n as end
                 m <= 8'b0;
                 n <= 8'b0;
                 rxError <= 1'b0;
+                isNum <= 1'b0;
+                num <= 8'b0;
             end else if(!isBusy && rxError) begin
                 if(rxDoneWire && checkLineFeed(rxData)) begin
                     rxDone <= 1'b1;
                     isBusy <= 1'b0;
                     isM <= 1'b0;
                     isN <= 1'b0;
+                    isNum <= 1'b0;
+                    num <= 8'b0;
+                end
+            end else if(isBusy && an && isNum) begin
+                if(!isM) begin
+                    m <= num;
+                    isM <= 1'b1;
+                    isNum <= 1'b0;
+                    num <= 8'b0;
+                end else if(!isN) begin
+                    n <= num;
+                    isN <= 1'b0;
+                    isNum <= 1'b0;
+                    num <= 8'b0;
+                    isBusy <= 1'b0;
+                    rxDone <= 1'b1;
                 end
             end else if(isBusy && rxDoneWire) begin
-                if(!isM) begin
-                    getNum(m,isM,8'd1,8'd5);
-                end else if(!isN) begin
-                    getNum(n,isN,8'd1,8'd5);
-                    if(isN) begin
+                getNum(num,isNum,8'd1,8'd5);
+                if(isNum) begin
+                    if(!checkLineFeed(rxData)) begin
+                        rxError <= 1'b1;
                         isBusy <= 1'b0;
-                        rxError <= 1'b0;
-                        isN <= 1'b0;
-                        if(!checkLineFeed(rxData)) begin
-                            rxError <= 1'b1;
-                        end
                     end
                 end
             end
