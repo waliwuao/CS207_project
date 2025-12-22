@@ -27,6 +27,11 @@ module matrixIO (
     reg [2:0] scaleCnt [0:MAX_SCALE-1]; 
     reg [2:0] last_limit;        // Track limit changes
 
+    // Effective limit to prevent out-of-bounds access
+    wire [2:0] effective_limit;
+    assign effective_limit = (user_max_limit > MAX_MATRIX) ? MAX_MATRIX : 
+                             (user_max_limit == 0) ? 3'd1 : user_max_limit;
+
     // Procedural loop indices (must not be declared mid-block)
     integer i;
     integer j;
@@ -66,9 +71,9 @@ module matrixIO (
             // Update the index of the currently stored index for later use
             scaleIdx <= current_scale_idx;
 
-            if (user_max_limit != last_limit) begin
+            if (effective_limit != last_limit) begin
                 // Limit changed: Re-evaluate all storage to prevent corruption
-                last_limit <= user_max_limit;
+                last_limit <= effective_limit;
                 for(i=0; i<MAX_SCALE; i=i+1) begin
                     if (scaleCnt[i] > scalePtr[i]) begin
                         // Case 1: Wrapped buffer (e.g. 1, 2, 0).
@@ -80,10 +85,10 @@ module matrixIO (
                     end else begin
                         // Case 2: Linear buffer (0..Cnt-1).
                         // Layout is compatible with any limit >= Cnt.
-                        if (scaleCnt[i] > user_max_limit) begin
+                        if (scaleCnt[i] > effective_limit) begin
                             // Shrinking (5->3): Truncate to fit new limit.
                             // Keeps indices 0..new_limit-1 (Oldest data).
-                            scaleCnt[i] <= user_max_limit;
+                            scaleCnt[i] <= effective_limit;
                             scalePtr[i] <= 3'd0; // Buffer is now full, next write wraps to 0
                         end
                         // Else: Growing (3->5) or fitting. Keep data as is.
@@ -100,13 +105,13 @@ module matrixIO (
                             writeData[elemIdx*ELEM_WIDTH +: ELEM_WIDTH];
                     end
 
-                    // 2. Update counter (saturate at user_max_limit)
-                    if(scaleCnt[current_scale_idx] < user_max_limit) begin
+                    // 2. Update counter (saturate at effective_limit)
+                    if(scaleCnt[current_scale_idx] < effective_limit) begin
                         scaleCnt[current_scale_idx] <= scaleCnt[current_scale_idx] + 1'b1;
                     end
 
                     // 3. Update pointer (circular buffer: 0->1->...->limit-1->0...)
-                    if(scalePtr[current_scale_idx] >= user_max_limit - 1) begin
+                    if(scalePtr[current_scale_idx] >= effective_limit - 1) begin
                         scalePtr[current_scale_idx] <= 3'd0;
                     end else begin
                         scalePtr[current_scale_idx] <= scalePtr[current_scale_idx] + 1'b1;
@@ -119,7 +124,7 @@ module matrixIO (
             // NOTE: Storage is a circular buffer; scalePtr points to the *next* write slot.
             // When full, the oldest matrix sits at scalePtr (the next one to be overwritten).
             // When not full, matrices are stored from slot 0..(count-1).
-            if (scaleCnt[current_scale_idx] >= user_max_limit) begin
+            if (scaleCnt[current_scale_idx] >= effective_limit) begin
                 baseSlot = scalePtr[current_scale_idx];
             end else begin
                 baseSlot = 0;
@@ -128,8 +133,8 @@ module matrixIO (
             // Map output slot readIdx -> source slot in circular buffer
             if (readIdx < scaleCnt[current_scale_idx]) begin
                 srcSlot = baseSlot + readIdx;
-                if (srcSlot >= user_max_limit) begin
-                    srcSlot = srcSlot - user_max_limit;
+                if (srcSlot >= effective_limit) begin
+                    srcSlot = srcSlot - effective_limit;
                 end
                 for (eIdx = 0; eIdx < MAX_ELEM; eIdx = eIdx + 1) begin
                     readData[(eIdx*ELEM_WIDTH) +: ELEM_WIDTH] <=

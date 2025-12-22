@@ -112,7 +112,8 @@ module MatrixUartRx (// put \n as end
                     rxError <= 1'b0;
                     isM <= 1'b0;
                     isN <= 1'b0;
-                    matrixData <= matrixData + ({200'b0,num}<<(idx*8));
+                    // Use bitwise masking instead of addition to prevent corruption
+                    matrixData <= (matrixData & ~(200'hFF << (idx*8))) | ({192'b0, num} << (idx*8));
                     num = 8'b0;
                 end else begin
                     rxError <= 1'b1;
@@ -174,8 +175,10 @@ module MatrixUartRx (// put \n as end
             end else if(isBusy && rxDoneWire) begin
                 if(!isM) begin
                     getNum(m,isM,8'd1,8'd5);
+                    if(isM && m == 8'd0) rxError <= 1'b1;
                 end else if(!isN) begin
                     getNum(n,isN,8'd1,8'd5);
+                    if(isN && n == 8'd0) rxError <= 1'b1;
                 end else if(idx < m*n) begin
                     getNum(tmp,isNum,lowerLimit,upperLimit);
                     if(isNum) begin

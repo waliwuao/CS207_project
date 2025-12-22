@@ -645,6 +645,12 @@ module top #(
                 show_info_req <= 1'b0;
                 show_info_seen_busy <= 1'b0;
                 show_seen_matrix_busy <= 1'b0;
+
+                // Auto-switch view to stored dimensions when exiting STORE mode
+                if (mode_state == MODE_STORE && store_exit_to_default) begin
+                    req_m <= store_m;
+                    req_n <= store_n;
+                end
             end
 
             case (show_state)
