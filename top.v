@@ -707,7 +707,8 @@ module top #(
                 SHOW_IDLE: begin
                     show_cursor <= 3'd0;
                     prep_timer  <= 2'd0;
-                    if (mode_state == MODE_SHOW) begin
+                    // 【关键修改】必须等待 mode_uart_busy 结束，否则 SHOW 消息会被覆盖
+                    if (mode_state == MODE_SHOW && !mode_uart_busy) begin
                         // Entry point: Request "show" then "wait1"
                         prompt_req     <= 1'b1;
                         prompt_req_sel <= PROMPT_SHOW;
@@ -2250,7 +2251,8 @@ module top #(
 
             case (gen_state)
                 GEN_IDLE: begin
-                    if (mode_state == MODE_GEN) begin
+                    // 【关键修改】必须等待 mode_uart_busy 结束，否则 GEN 消息会被覆盖
+                    if (mode_state == MODE_GEN && !mode_uart_busy) begin
                         gen_prompt_req     <= 1'b1;
                         gen_prompt_req_sel <= PROMPT_GENERATE;
                         gen_state          <= GEN_ENTRY_WAIT1;
@@ -2453,7 +2455,9 @@ module top #(
     wire store_uart_sel_matrix;
     assign store_uart_sel_matrix = shared_matrix_busy || store_send_pulse || (store_state_fsm == STORE_WAIT && !store_seen_matrix_busy);
 
-    assign uart_tx = (mode_state == MODE_SHOW) ? (show_uart_sel_info ? show_info_uart_tx : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)) :
+    // 【关键修改】mode_uart_busy 优先级最高，保证 GEN/SHOW 状态名能够发出去
+    assign uart_tx = mode_uart_busy ? mode_uart_tx :
+                     (mode_state == MODE_SHOW) ? (show_uart_sel_info ? show_info_uart_tx : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)) :
                      (mode_state == MODE_GEN)  ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx) :
                      (mode_state == MODE_STORE)? (store_uart_sel_matrix ? matrix_uart_tx : mode_uart_tx) :
                      (mode_state == MODE_CALC) ? (calc_uart_sel_info ? calc_info_uart_tx :
