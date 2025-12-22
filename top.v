@@ -2148,7 +2148,7 @@ module top #(
     // 璇风‘淇濅綘鏈� random.v
     random u_rand (
         .clk(clk),
-        .rst(~rst_n),
+        .rst(storage_rst),
         .genEnable(rand_enable),
         .max_val(8'd9),
         .readData(rand_matrix)
@@ -2455,6 +2455,7 @@ module top #(
     wire store_uart_sel_matrix;
     assign store_uart_sel_matrix = shared_matrix_busy || store_send_pulse || (store_state_fsm == STORE_WAIT && !store_seen_matrix_busy);
 
+    // 銆愬叧閿慨鏀广�憁ode_uart_busy 浼樺厛绾ф渶楂橈紝淇濊瘉 GEN/SHOW 鐘舵�佸悕鑳藉鍙戝嚭鍘�
     assign uart_tx = mode_uart_busy ? mode_uart_tx :
                      (mode_state == MODE_SHOW) ? (show_uart_sel_info ? show_info_uart_tx : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx)) :
                      (mode_state == MODE_GEN)  ? (gen_uart_sel_prompt ? gen_prompt_uart_tx : gen_matrix_uart_tx) :
