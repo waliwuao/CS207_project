@@ -1997,7 +1997,7 @@ module top #(
                                 calc_seen_result_busy <= 1'b0;
                                 calc_flow <= CALC_FLOW_RESULT_SEND_WAIT;
                             end
-                        end
+                        enda
 
                         CALC_FLOW_RESULT_SEND_WAIT: begin
                             if (calc_result_tx_busy) begin
@@ -2148,7 +2148,7 @@ module top #(
     // 请确保你有 random.v
     random u_rand (
         .clk(clk),
-        .rst(~rst_n),
+        .rst(storage_rst),
         .genEnable(rand_enable),
         .max_val(8'd9),
         .readData(rand_matrix)
