@@ -52,3 +52,11 @@ set_property IOSTANDARD LVCMOS33 [get_ports {an[0]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {an[1]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {an[2]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {an[3]}]
+
+
+set_property IOSTANDARD LVCMOS33 [get_ports uart_tx]
+set_property PACKAGE_PIN T4 [get_ports uart_tx]
+
+
+set_property IOSTANDARD LVCMOS33 [get_ports uart_rx]
+set_property PACKAGE_PIN N5 [get_ports uart_rx]

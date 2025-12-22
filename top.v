@@ -347,6 +347,23 @@ module top #(
         .rxError(store_rx_error)
     );
 
+    // Latch for STORE mode data
+    reg [7:0]   store_m_latched;
+    reg [7:0]   store_n_latched;
+    reg [199:0] store_data_latched;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            store_m_latched    <= 8'd0;
+            store_n_latched    <= 8'd0;
+            store_data_latched <= 200'd0;
+        end else if (store_rx_done && !store_rx_error) begin
+            store_m_latched    <= store_m;
+            store_n_latched    <= store_n;
+            store_data_latched <= store_matrix_data;
+        end
+    end
+
     // --------------------
     // UART TX for STORE mode (Echo)
     // --------------------
@@ -358,9 +375,9 @@ module top #(
         .clk(clk),
         .uartTxRstN(rst_n),
         .sendOne(store_tx_start),
-        .matrixData(store_matrix_data),
-        .m(store_m),
-        .n(store_n),
+        .matrixData(store_data_latched),
+        .m(store_m_latched),
+        .n(store_n_latched),
         .id(8'd0), // ID not used for echo
         .ifID(1'b0),
         .ifNM(1'b1),
@@ -542,9 +559,9 @@ module top #(
                     storage_wdata <= gen_write_wdata;
                     storage_we    <= 1'b1;
                 end else if (store_write_req) begin
-                    storage_dimX  <= store_m;
-                    storage_dimY  <= store_n;
-                    storage_wdata <= store_matrix_data;
+                    storage_dimX  <= store_m_latched;
+                    storage_dimY  <= store_n_latched;
+                    storage_wdata <= store_data_latched;
                     storage_we    <= 1'b1;
                 end else if (mode_state == MODE_SHOW) begin
                     if (show_info_scan_active) begin

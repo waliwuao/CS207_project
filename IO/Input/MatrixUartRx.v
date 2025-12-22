@@ -86,6 +86,8 @@ module MatrixUartRx (// put \n as end
     end
     endfunction
 
+    reg digitsSeen;
+
     task getNum;
     inout [7:0] num;
     inout isDone;
@@ -95,34 +97,21 @@ module MatrixUartRx (// put \n as end
         if(checkNum(rxData)) begin
             if({2'b0,num}*10+(rxData-8'd48) <= upper) begin
                 num = num*10+(rxData-8'd48);
+                digitsSeen <= 1'b1;
             end else begin
                 rxError <= 1'b1;
                 isBusy <= 1'b0;
             end
-        end else if(checkBlank(rxData)) begin
-            if(num >= lower && num <= upper) begin
-                isDone = 1'b1;
-            end else begin
-                rxError <= 1'b1;
-                isBusy <= 1'b0;
-            end
-        end else if(checkLineFeed(rxData)) begin
-            if(num >= lower && num <= upper) begin
-                if(isM && isN) begin
-                    rxError <= 1'b0;
-                    isM <= 1'b0;
-                    isN <= 1'b0;
-                    // Use bitwise masking instead of addition to prevent corruption
-                    matrixData <= (matrixData & ~(200'hFF << (idx*8))) | ({192'b0, num} << (idx*8));
-                    num = 8'b0;
+        end else if(checkBlank(rxData) || checkLineFeed(rxData)) begin
+            if(digitsSeen) begin
+                if(num >= lower && num <= upper) begin
+                    isDone = 1'b1;
+                    digitsSeen <= 1'b0;
                 end else begin
                     rxError <= 1'b1;
+                    isBusy <= 1'b0;
                 end
-            end else begin
-                rxError <= 1'b1;
             end
-            rxDone <= 1'b1;
-            isBusy <= 1'b0;
         end else begin
             rxError <= 1'b1;
             isBusy <= 1'b0;
@@ -143,6 +132,7 @@ module MatrixUartRx (// put \n as end
             isNum <= 1'b0;
             idx <= 8'b0;
             tmp <= 8'b0;
+            digitsSeen <= 1'b0;
         end else begin
             rxDone <= 1'b0;
             if (rxStart && !isBusy) begin
@@ -150,24 +140,16 @@ module MatrixUartRx (// put \n as end
                 isNum <= 1'b0;
                 isM <= 1'b0;
                 isN <= 1'b0;
-                isNum <= 1'b0;
                 idx <= 8'b0;
                 matrixData <= 200'b0;
                 m <= 8'b0;
                 n <= 8'b0;
                 tmp <= 8'b0;
                 rxError <= 1'b0;
+                digitsSeen <= 1'b0;
             end else if(!isBusy && rxError) begin
                 if(rxDoneWire && checkLineFeed(rxData)) begin
                     rxDone <= 1'b1;
-                    isBusy <= 1'b0;
-                    isM <= 1'b0;
-                    isN <= 1'b0;
-                end
-            end else if(!isBusy && isM && isN && idx == n*m) begin
-                if(rxDoneWire && checkLineFeed(rxData)) begin
-                    rxDone <= 1'b1;
-                    rxError <= 1'b0;
                     isBusy <= 1'b0;
                     isM <= 1'b0;
                     isN <= 1'b0;
@@ -182,12 +164,13 @@ module MatrixUartRx (// put \n as end
                 end else if(idx < m*n) begin
                     getNum(tmp,isNum,lowerLimit,upperLimit);
                     if(isNum) begin
-                        if(idx==n*m-1) begin
-                            isBusy <= 1'b0;
-                            rxError <= 1'b0;
-                        end
                         matrixData <= (matrixData & ~(200'hFF << (idx*8))) | ({192'b0, tmp} << (idx*8));
                         tmp <= 8'b0;
+                        if(idx == n*m - 1) begin
+                            isBusy <= 1'b0;
+                            rxDone <= 1'b1;
+                            rxError <= 1'b0;
+                        end
                         idx <= idx + 1;
                         isNum <= 1'b0;
                     end
