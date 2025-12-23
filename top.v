@@ -297,7 +297,9 @@ module top #(
     reg        store_rx_start;
     wire [7:0] store_m;
     wire [7:0] store_n;
+    reg [7:0] store_for_n,store_for_m;
     wire [199:0] store_matrix_data;
+    reg [199:0] store_for_matrix;
     wire       store_rx_done;
     wire       store_rx_error;
 
@@ -441,6 +443,9 @@ module top #(
                             if (!store_rx_error) begin
                                 store_tx_start <= 1'b1;
                                 store_state <= STORE_ECHO;
+                                store_for_matrix <= store_matrix_data;
+                                store_for_n <= store_n;
+                                store_for_m <= store_m;
                             end else begin
                                 store_error_pulse <= 1'b1;
                                 store_rx_start <= 1'b1;
@@ -485,9 +490,9 @@ module top #(
                     storage_wdata <= gen_write_wdata;
                     storage_we    <= 1'b1;
                 end else if (store_write_req) begin
-                    storage_dimX  <= store_m;
-                    storage_dimY  <= store_n;
-                    storage_wdata <= store_matrix_data;
+                    storage_dimX  <= store_for_m;
+                    storage_dimY  <= store_for_n;
+                    storage_wdata <= store_for_matrix;
                     storage_we    <= 1'b1;
                 end else if (mode_state == MODE_SHOW) begin
                     if (show_info_scan_active) begin
