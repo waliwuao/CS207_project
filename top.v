@@ -443,9 +443,6 @@ module top #(
                             if (!store_rx_error) begin
                                 store_tx_start <= 1'b1;
                                 store_state <= STORE_ECHO;
-                                store_for_matrix <= store_matrix_data;
-                                store_for_n <= store_n;
-                                store_for_m <= store_m;
                             end else begin
                                 store_error_pulse <= 1'b1;
                                 store_rx_start <= 1'b1;
@@ -456,6 +453,11 @@ module top #(
                     STORE_ECHO: begin
                         if (store_tx_busy) begin
                             store_state <= STORE_ECHO_BUSY;
+                        end
+                        if(store_tx_start) begin
+                            store_for_matrix <= store_matrix_data;
+                            store_for_n <= store_n;
+                            store_for_m <= store_m;
                         end
                     end
                     STORE_ECHO_BUSY: begin
