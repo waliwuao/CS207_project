@@ -1,24 +1,4 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: xch
-// 
-// Create Date: 
-// Design Name: 
-// Module Name: MartixUartRx
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 输入单个数据
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
-
 
 module MatrixUartRx (// put \n as end
     //element need in [0,9]
@@ -34,19 +14,6 @@ module MatrixUartRx (// put \n as end
     output reg rxDone,
     output reg rxError
 );
-
-    // reg sendOneD1, sendOneD2;
-    // always @(posedge clk or negedge rstN) begin
-    //     if(!uartTxRstN) begin
-    //         sendOneD1 <= 1'b0;
-    //         sendOneD2 <= 1'b0;
-    //     end else begin
-    //         sendOneD1 <= sendOne;
-    //         sendOneD2 <= sendOneD1;
-    //     end
-    // end
-    // wire rxStart;
-    // assign rxStart = sendOneD1 & ~sendOneD2;
 
     wire rxDoneWire;
     wire [7:0] rxData;
@@ -109,19 +76,32 @@ module MatrixUartRx (// put \n as end
         end else if(checkLineFeed(rxData)) begin
             if(num >= lower && num <= upper) begin
                 if(isM && isN) begin
-                    rxError <= 1'b0;
-                    isM <= 1'b0;
-                    isN <= 1'b0;
-                    matrixData <= matrixData + ({200'b0,num}<<(idx*8));
-                    num = 8'b0;
+                    // 修改点：判断是否为最后一个元素
+                    if (idx == m*n - 1) begin
+                        // 是最后一个元素，结束传输
+                        rxError <= 1'b0;
+                        isM <= 1'b0;
+                        isN <= 1'b0;
+                        // 使用更安全的掩码逻辑：先清零目标字节，再写入
+                        matrixData <= (matrixData & ~({200'hFF} << (idx*8))) | ({200'b0,num} << (idx*8));
+                        num = 8'b0;
+                        rxDone <= 1'b1;
+                        isBusy <= 1'b0;
+                    end else begin
+                        // 不是最后一个元素，仅作为分隔符，触发存储
+                        isDone = 1'b1;
+                    end
                 end else begin
+                    // 如果还在输入 m 或 n，遇到换行视为错误（或根据需求也可视为确认）
                     rxError <= 1'b1;
+                    rxDone <= 1'b1;
+                    isBusy <= 1'b0;
                 end
             end else begin
                 rxError <= 1'b1;
+                rxDone <= 1'b1;
+                isBusy <= 1'b0;
             end
-            rxDone <= 1'b1;
-            isBusy <= 1'b0;
         end else begin
             rxError <= 1'b1;
             isBusy <= 1'b0;
@@ -149,7 +129,6 @@ module MatrixUartRx (// put \n as end
                 isNum <= 1'b0;
                 isM <= 1'b0;
                 isN <= 1'b0;
-                isNum <= 1'b0;
                 idx <= 8'b0;
                 matrixData <= 200'b0;
                 m <= 8'b0;
@@ -180,10 +159,12 @@ module MatrixUartRx (// put \n as end
                     getNum(tmp,isNum,lowerLimit,upperLimit);
                     if(isNum) begin
                         if(idx==n*m-1) begin
+                            // 最后一个元素处理完毕，关闭Busy
                             isBusy <= 1'b0;
                             rxError <= 1'b0;
                         end
-                        matrixData <= (matrixData&(({1'b1}<<(idx*8))-1)) + ({200'b0,tmp}<<(idx*8));
+                        // 修改点：使用更安全的掩码逻辑
+                        matrixData <= (matrixData & ~({200'hFF} << (idx*8))) | ({200'b0,tmp} << (idx*8));
                         tmp <= 8'b0;
                         idx <= idx + 1;
                         isNum <= 1'b0;
