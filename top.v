@@ -15,25 +15,18 @@ module top #(
     output wire       uart_tx
 );
 
-    // --------------------
-    // Storage power-on reset (POR)
-    // --------------------
-    // User reset (rst_n) is used to return to DEFAULT mode in this project.
-    // To make stored/generated matrices survive that reset, matrixIO is only
-    // reset once after power-up/configuration.
+    // --------------------\
+    // Storage power-on reset (POR)\
+    // --------------------\
     reg        storage_por_done;
     reg [15:0] storage_por_cnt;
     wire       storage_rst;
 
-    // Synthesis-friendly initialization for FPGA; in simulation this also
-    // avoids X-propagation.
     initial begin
         storage_por_done = 1'b0;
         storage_por_cnt  = 16'd0;
     end
 
-    // Hold storage in reset for a short time after rst_n is released the first
-    // time. After that, never reset storage again.
     always @(posedge clk) begin
         if (!storage_por_done) begin
             if (!rst_n) begin
@@ -48,9 +41,9 @@ module top #(
 
     assign storage_rst = ~storage_por_done;
 
-    // --------------------
-    // Mode definitions
-    // --------------------
+    // --------------------\
+    // Mode definitions\
+    // --------------------\
     localparam MODE_DEFAULT = 3'd0;
     localparam MODE_STORE   = 3'd1;
     localparam MODE_GEN     = 3'd2;
@@ -58,15 +51,13 @@ module top #(
     localparam MODE_CALC    = 3'd4;
     localparam MODE_SETUP   = 3'd5;
 
-    // Matrix packing helpers
     localparam integer MATRIX_WIDTH = 25 * 8;
     localparam integer CONV_RESULT_WIDTH = 80 * 8;
-    localparam integer MATRIX_DEPTH = 3;
-    localparam integer TOTAL_WIDTH  = MATRIX_WIDTH; // Reduced to single matrix width
+    localparam integer TOTAL_WIDTH  = MATRIX_WIDTH;
 
-    // --------------------
-    // Basic mode handling
-    // --------------------
+    // --------------------\
+    // Basic mode handling\
+    // --------------------\
     reg [2:0]  mode_state;
     wire        error_active;
     wire        blink_bit;
@@ -88,7 +79,6 @@ module top #(
         end
     endfunction
 
-    // 请确保你有 debouncer.v
     debouncer #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_db (
@@ -98,7 +88,6 @@ module top #(
         .key_flag(btn_pulse)
     );
 
-    // 请确保你有 error_blink.v
     error_blink #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BLINK_HZ(BLINK_HZ)
@@ -119,9 +108,9 @@ module top #(
                                  (mode_sw == 5'b01000) ||
                                  (mode_sw == 5'b10000);
 
-    // --------------------
-    // Random Generator & Command Detection
-    // --------------------
+    // --------------------\
+    // Random Generator & Command Detection\
+    // --------------------\
     wire [25*8-1:0] rand_data_flat;
     reg [7:0]       rand_max_val;
     reg             rand_gen_enable;
@@ -146,14 +135,12 @@ module top #(
         end else begin
             if (rx_done) begin
                 uart_shift_reg <= {uart_shift_reg[39:0], rx_data};
-                // Check if the NEW shift register content (formed by old[23:0] + rx_data) is "rand"
                 if ({uart_shift_reg[23:0], rx_data} == "rand") begin
                     rand_detected <= 1'b1;
                 end else begin
                     rand_detected <= 1'b0;
                 end
 
-                // Check for "matrix"
                 if ({uart_shift_reg[39:0], rx_data} == "matrix") begin
                     matrix_detected <= 1'b1;
                 end else begin
@@ -166,9 +153,9 @@ module top #(
         end
     end
 
-    // --------------------
-    // SETUP Mode Logic
-    // --------------------
+    // --------------------\
+    // SETUP Mode Logic\
+    // --------------------\
     localparam SETUP_IDLE = 2'd0;
     localparam SETUP_WAIT_CONFIRM = 2'd1;
     localparam SETUP_ADJUST = 2'd2;
@@ -177,22 +164,17 @@ module top #(
     reg [2:0] user_max_limit;
     reg       setup_error_pulse;
 
-    // Helper to extract scalar from switches (same as CALC mode)
     wire [3:0] setup_scalar_val;
     assign setup_scalar_val = {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
 
-    // Use storage_rst (POR) instead of rst_n for user_max_limit
-    // so it survives the user reset (which returns to DEFAULT mode).
     always @(posedge clk or posedge storage_rst) begin
         if (storage_rst) begin
             setup_state <= SETUP_IDLE;
-            user_max_limit <= 3'd3; // Default to 3
+            user_max_limit <= 3'd3; 
             setup_error_pulse <= 1'b0;
         end else begin
-            setup_error_pulse <= 1'b0; // Pulse default low
+            setup_error_pulse <= 1'b0; 
 
-            // If global reset (rst_n) is asserted, we should reset the state machine
-            // but NOT the user_max_limit.
             if (!rst_n) begin
                 setup_state <= SETUP_IDLE;
             end else begin
@@ -212,15 +194,11 @@ module top #(
                         end
                         SETUP_ADJUST: begin
                             if (btn_pulse) begin
-                                // Validate input
-                                // Max storage range is 3 (physical limit)
-                                // Cannot be 0
                                 if (setup_scalar_val > 0 && setup_scalar_val <= 3) begin
                                     user_max_limit <= setup_scalar_val[2:0];
                                     setup_state <= SETUP_IDLE;
                                 end else begin
                                     setup_error_pulse <= 1'b1;
-                                    // Stay in ADJUST
                                 end
                             end
                         end
@@ -230,7 +208,6 @@ module top #(
         end
     end
 
-    // Allow CALC mode to return to DEFAULT by user confirmation (no global reset).
     reg calc_exit_to_default;
 
     always @(posedge clk or negedge rst_n) begin
@@ -255,12 +232,11 @@ module top #(
             end else if (mode_state == MODE_STORE && store_exit_to_default) begin
                 mode_state <= MODE_DEFAULT;
             end else begin
-                mode_state <= mode_state; // Stay in mode until explicit exit/reset
+                mode_state <= mode_state; 
             end
         end
     end
 
-    // 请确保你有 led_display.v
     wire alert_active;
     wire alert_blink_bit;
     wire [7:0] led_out_wire;
@@ -274,7 +250,6 @@ module top #(
         .mode_led(led_out_wire)
     );
     
-    // Debug: show conv_input_cnt on LEDs in CALC mode
     assign mode_led = (mode_state == MODE_CALC && calc_state == CALC_OP_CONV) ? {4'b0, conv_input_cnt} : led_out_wire;
 
     wire       calc_countdown_en;
@@ -306,13 +281,9 @@ module top #(
         .an(an)
     );
 
-    // --------------------
-    // UART RX for SHOW input
-    // --------------------
     wire [7:0] rx_data;
     wire       rx_done;
 
-    // 请确保你有 UartRx.v
     UartRx #(
         .CLK_FREQ(CLK_FREQ_HZ)
     ) u_rx (
@@ -323,9 +294,6 @@ module top #(
         .rxDone(rx_done)
     );
 
-    // --------------------
-    // UART RX for STORE mode (Matrix Input)
-    // --------------------
     reg        store_rx_start;
     wire [7:0] store_m;
     wire [7:0] store_n;
@@ -347,26 +315,6 @@ module top #(
         .rxError(store_rx_error)
     );
 
-    // Latch for STORE mode data
-    reg [7:0]   store_m_latched;
-    reg [7:0]   store_n_latched;
-    reg [199:0] store_data_latched;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            store_m_latched    <= 8'd0;
-            store_n_latched    <= 8'd0;
-            store_data_latched <= 200'd0;
-        end else if (store_rx_done && !store_rx_error) begin
-            store_m_latched    <= store_m;
-            store_n_latched    <= store_n;
-            store_data_latched <= store_matrix_data;
-        end
-    end
-
-    // --------------------
-    // UART TX for STORE mode (Echo)
-    // --------------------
     reg        store_tx_start;
     wire       store_tx_busy;
     wire       store_uart_tx;
@@ -375,10 +323,10 @@ module top #(
         .clk(clk),
         .uartTxRstN(rst_n),
         .sendOne(store_tx_start),
-        .matrixData(store_data_latched),
-        .m(store_m_latched),
-        .n(store_n_latched),
-        .id(8'd0), // ID not used for echo
+        .matrixData(store_matrix_data),
+        .m(store_m),
+        .n(store_n),
+        .id(8'd0), 
         .ifID(1'b0),
         .ifNM(1'b1),
         .uartTx(store_uart_tx),
@@ -396,9 +344,6 @@ module top #(
         end
     endfunction
 
-    // --------------------
-    // Matrix storage
-    // --------------------
     reg               storage_we;
     reg [7:0]         storage_dimX;
     reg [7:0]         storage_dimY;
@@ -406,13 +351,9 @@ module top #(
     wire [TOTAL_WIDTH-1:0] storage_rdata;
     wire [2:0]        storage_count;
 
-    // SHOW controller signals needed for matrixIO
     reg [7:0] req_m, req_n;
-
-    // CALC controller signals needed for matrixIO
     reg [7:0] calc_req_m, calc_req_n;
 
-    // SHOW matrix inventory info (before user inputs dimensions)
     reg        show_info_req;
     reg        show_info_start;
     reg        show_info_seen_busy;
@@ -422,7 +363,6 @@ module top #(
     wire [7:0] show_info_dimX;
     wire [7:0] show_info_dimY;
 
-    // CALC matrix inventory info (same format as SHOW)
     reg        calc_info_req;
     reg        calc_info_start;
     reg        calc_info_seen_busy;
@@ -432,7 +372,6 @@ module top #(
     wire [7:0] calc_info_dimX;
     wire [7:0] calc_info_dimY;
 
-    // Forward declarations for GEN signals used in storage block
     reg       gen_write_req;
     reg [7:0] gen_write_dimX;
     reg [7:0] gen_write_dimY;
@@ -450,7 +389,6 @@ module top #(
         end
     end
 
-    // 请确保你有 matrixIO.v
     matrixIO u_matrix_store (
         .clk(clk),
         .rst(storage_rst),
@@ -464,9 +402,6 @@ module top #(
         .fillState(storage_count)
     );
 
-    // --------------------
-    // STORE Mode Logic
-    // --------------------
     localparam STORE_IDLE = 3'd0;
     localparam STORE_WAIT_RX = 3'd1;
     localparam STORE_ECHO = 3'd2;
@@ -498,18 +433,15 @@ module top #(
             end else begin
                 case (store_state)
                     STORE_IDLE: begin
-                        // Start RX immediately upon entry
                         store_rx_start <= 1'b1;
                         store_state <= STORE_WAIT_RX;
                     end
                     STORE_WAIT_RX: begin
                         if (store_rx_done) begin
                             if (!store_rx_error) begin
-                                // Valid data received, echo it back
                                 store_tx_start <= 1'b1;
                                 store_state <= STORE_ECHO;
                             end else begin
-                                // Invalid data, blink error and retry
                                 store_error_pulse <= 1'b1;
                                 store_rx_start <= 1'b1;
                                 store_state <= STORE_WAIT_RX;
@@ -517,20 +449,17 @@ module top #(
                         end
                     end
                     STORE_ECHO: begin
-                        // Wait for busy to assert
                         if (store_tx_busy) begin
                             store_state <= STORE_ECHO_BUSY;
                         end
                     end
                     STORE_ECHO_BUSY: begin
-                        // Wait for transmission to finish
                         if (!store_tx_busy) begin
                             store_state <= STORE_DONE;
                         end
                     end
                     STORE_DONE: begin
                         if (btn_pulse) begin
-                            // Valid data confirmed, write and exit
                             store_write_req <= 1'b1;
                             store_exit_to_default <= 1'b1;
                             store_state <= STORE_IDLE;
@@ -549,19 +478,16 @@ module top #(
             storage_wdata<= {MATRIX_WIDTH{1'b0}};
         end else begin
             storage_we <= 1'b0;
-
-            // During storage reset window, don't write.
             if (!storage_rst) begin
-                // GEN write has priority; otherwise track dims for SHOW/GEN reads
                 if (gen_write_req) begin
                     storage_dimX  <= gen_write_dimX;
                     storage_dimY  <= gen_write_dimY;
                     storage_wdata <= gen_write_wdata;
                     storage_we    <= 1'b1;
                 end else if (store_write_req) begin
-                    storage_dimX  <= store_m_latched;
-                    storage_dimY  <= store_n_latched;
-                    storage_wdata <= store_data_latched;
+                    storage_dimX  <= store_m;
+                    storage_dimY  <= store_n;
+                    storage_wdata <= store_matrix_data;
                     storage_we    <= 1'b1;
                 end else if (mode_state == MODE_SHOW) begin
                     if (show_info_scan_active) begin
@@ -587,9 +513,9 @@ module top #(
         end
     end
 
-    // --------------------
-    // SHOW controller (Fixed Logic)
-    // --------------------
+    // --------------------\
+    // SHOW controller (Fixed Logic)\
+    // --------------------\
     localparam SHOW_IDLE        = 3'd0;
     localparam SHOW_ENTRY_WAIT1 = 3'd1;
     localparam SHOW_SEND_INFO   = 3'd7;
@@ -614,25 +540,23 @@ module top #(
     reg [2:0] prompt_sel;
     reg       prompt_req;
     reg [2:0] prompt_req_sel;
-    
-    // Timer to wait for storage lookup
     reg [1:0] prep_timer;
+    
+    // --- 新增：UART 安全间隔计数器 ---\
+    reg [15:0] uart_safety_cnt; 
 
     wire [7:0] rx_digit;
     wire       rx_digit_ok;
     wire       rx_is_ignore;
     wire       rx_digit_valid_any;
-
-    // Detect UART busyness to avoid collision
-    wire show_tx_busy;  
-    wire mode_uart_busy; 
+    wire       show_tx_busy;  
+    wire       mode_uart_busy; 
 
     assign rx_digit     = decode_digit(rx_data);
     assign rx_digit_ok  = (rx_digit >= 8'd1) && (rx_digit <= 8'd5);
     assign rx_digit_valid_any = (rx_data >= 8'h30) && (rx_data <= 8'h39);
     wire [7:0] rx_digit_val_any;
     assign rx_digit_val_any = rx_data - 8'h30;
-    // Ignore CR (0D), LF (0A), Space (20)
     assign rx_is_ignore = (rx_data == 8'h0D) || (rx_data == 8'h0A) || (rx_data == 8'h20);
 
     always @(posedge clk or negedge rst_n) begin
@@ -651,19 +575,17 @@ module top #(
             show_info_req   <= 1'b0;
             show_info_start <= 1'b0;
             show_info_seen_busy <= 1'b0;
+            uart_safety_cnt <= 16'd0;
         end else begin
             show_send_pulse <= 1'b0;
             prompt_start    <= 1'b0;
             show_info_start <= 1'b0;
 
-            // If we leave SHOW mode, cancel pending prompts
             if (mode_state != MODE_SHOW) begin
                 prompt_req <= 1'b0;
                 show_info_req <= 1'b0;
                 show_info_seen_busy <= 1'b0;
                 show_seen_matrix_busy <= 1'b0;
-
-                // Auto-switch view to stored dimensions when exiting STORE mode
                 if (mode_state == MODE_STORE && store_exit_to_default) begin
                     req_m <= store_m;
                     req_n <= store_n;
@@ -675,10 +597,8 @@ module top #(
                     show_cursor <= 3'd0;
                     prep_timer  <= 2'd0;
                     if (mode_state == MODE_SHOW) begin
-                        // Entry point: Request "show" then "wait1"
-                        prompt_req     <= 1'b1;
-                        prompt_req_sel <= PROMPT_SHOW;
                         show_state     <= SHOW_ENTRY_WAIT1;
+                        uart_safety_cnt <= 16'd0; // 重置计数器\
                     end
                 end
 
@@ -686,11 +606,22 @@ module top #(
                     show_cursor <= 3'd0;
                     if (mode_state != MODE_SHOW) begin
                         show_state <= SHOW_IDLE;
-                    end else if (!prompt_req && !prompt_uart_busy) begin
-                        // After "show" is sent, print inventory info first
-                        show_info_req <= 1'b1;
-                        show_info_seen_busy <= 1'b0;
-                        show_state    <= SHOW_SEND_INFO;
+                    end else begin
+                        // 等待 "SHOW\n" 发送完毕 (mode_uart_busy 变低)\
+                        // 并且额外等待一段时间 (uart_safety_cnt) 以确保停止位不被切断\
+                        if (mode_uart_busy) begin
+                            uart_safety_cnt <= 16'd0;
+                        end else begin
+                            // 等待约 20,000 个时钟周期 (在 100MHz 下约 200us)\
+                            // 115200波特率下，1个bit约8.6us。200us 足够容纳 >20个bit的死区时间，非常安全。\
+                            if (uart_safety_cnt < 16'd20000) begin
+                                uart_safety_cnt <= uart_safety_cnt + 1'b1;
+                            end else if (!prompt_req && !prompt_uart_busy) begin
+                                show_info_req <= 1'b1;
+                                show_info_seen_busy <= 1'b0;
+                                show_state    <= SHOW_SEND_INFO;
+                            end
+                        end
                     end
                 end
 
@@ -704,10 +635,9 @@ module top #(
                         end
 
                         if (show_info_seen_busy && !show_info_uart_busy && !show_info_req) begin
-                        // Inventory info done -> now prompt for dimensions
-                        prompt_req     <= 1'b1;
-                        prompt_req_sel <= PROMPT_WAIT1;
-                        show_state     <= SHOW_WAIT_M;
+                            prompt_req     <= 1'b1;
+                            prompt_req_sel <= PROMPT_WAIT1;
+                            show_state     <= SHOW_WAIT_M;
                         end
                     end
                 end
@@ -718,18 +648,15 @@ module top #(
                         show_state <= SHOW_IDLE;
                     end else if (rx_done) begin
                         if (rx_digit_ok) begin
-                            // Valid M -> Request "Wait2" -> Wait for N
                             req_m          <= rx_digit;
                             prompt_req     <= 1'b1;
                             prompt_req_sel <= PROMPT_WAIT2;
                             show_state     <= SHOW_WAIT_N;
                         end else if (!rx_is_ignore) begin
-                            // Invalid input (and not newline) -> Re-send "Wait1"
                             prompt_req     <= 1'b1;
                             prompt_req_sel <= PROMPT_WAIT1;
                             show_state     <= SHOW_WAIT_M;
                         end
-                        // If rx_is_ignore, do nothing (stay in WAIT_M)
                     end
                 end
 
@@ -739,14 +666,12 @@ module top #(
                         show_state <= SHOW_IDLE;
                     end else if (rx_done) begin
                         if (rx_digit_ok) begin
-                            // Valid N -> Request "Display" -> Prepare to send
                             req_n          <= rx_digit;
                             prompt_req     <= 1'b1;
                             prompt_req_sel <= PROMPT_DISPLAY;
                             show_state     <= SHOW_PREP;
                             prep_timer     <= 2'd0;
                         end else if (!rx_is_ignore) begin
-                            // Invalid input -> Re-send "Wait2"
                             prompt_req     <= 1'b1;
                             prompt_req_sel <= PROMPT_WAIT2;
                             show_state     <= SHOW_WAIT_N;
@@ -755,8 +680,6 @@ module top #(
                 end
 
                 SHOW_PREP: begin
-                    // Wait a few cycles for req_m/n to propagate to matrixIO
-                    // and for storage_count to settle.
                     show_cursor <= 3'd0;
                     if (mode_state != MODE_SHOW) begin
                         show_state <= SHOW_IDLE;
@@ -765,7 +688,6 @@ module top #(
                             prep_timer <= prep_timer + 1'b1;
                         end else begin
                             if (storage_count == 3'd0) begin
-                                // No matrices found -> Restart with "Wait1"
                                 prompt_req     <= 1'b1;
                                 prompt_req_sel <= PROMPT_WAIT1;
                                 show_state     <= SHOW_WAIT_M;
@@ -780,12 +702,10 @@ module top #(
                     if (mode_state != MODE_SHOW) begin
                         show_state <= SHOW_IDLE;
                     end else if (show_cursor >= storage_count) begin
-                        // Done sending all matrices -> Restart with "Wait1"
                         prompt_req     <= 1'b1;
                         prompt_req_sel <= PROMPT_WAIT1;
                         show_state     <= SHOW_WAIT_M;
                     end else if (!show_tx_busy && !prompt_req && !mode_uart_busy) begin
-                        // UART free, prompt done -> Trigger Matrix Send
                         show_send_pulse <= 1'b1;
                         show_seen_matrix_busy <= 1'b0;
                         show_state      <= SHOW_SEND_WAIT;
@@ -796,14 +716,10 @@ module top #(
                     if (mode_state != MODE_SHOW) begin
                         show_state <= SHOW_IDLE;
                     end else begin
-                        // MatrixUartTx asserts busy one clock after sendOne.
-                        // Don't treat a send as finished until we've observed busy high at least once.
                         if (show_matrix_busy) begin
                             show_seen_matrix_busy <= 1'b1;
                         end
-
                         if (show_seen_matrix_busy && !show_matrix_busy) begin
-                            // Matrix transmission finished
                             show_cursor <= show_cursor + 1'b1;
                             show_state  <= SHOW_SEND_ARM;
                         end
@@ -813,24 +729,18 @@ module top #(
                 default: show_state <= SHOW_IDLE;
             endcase
 
-            // Dispatch prompt request when UART is clear
             if (!show_tx_busy && !mode_uart_busy && prompt_req && mode_state == MODE_SHOW) begin
                 prompt_sel   <= prompt_req_sel;
                 prompt_start <= 1'b1;
                 prompt_req   <= 1'b0;
             end
 
-            // Dispatch SHOW inventory info when UART is clear
             if (!show_tx_busy && !mode_uart_busy && show_info_req && mode_state == MODE_SHOW) begin
                 show_info_start <= 1'b1;
                 show_info_req   <= 1'b0;
             end
         end
     end
-
-    // --------------------
-    // Output Multiplexing & TX modules
-    // --------------------
 
     wire [199:0] show_matrix_slice;
     assign show_matrix_slice = storage_rdata;
@@ -840,7 +750,6 @@ module top #(
     wire matrix_uart_tx;
     wire show_matrix_busy;
 
-    // Use MatrixUartTx busy directly (no registered lag).
     assign show_tx_busy = prompt_uart_busy || show_matrix_busy || show_info_uart_busy;
 
     ShowUartTx #(
@@ -856,7 +765,6 @@ module top #(
         .busy(prompt_uart_busy)
     );
 
-    // SHOW inventory info TX (new)
     ShowMatrixInfoTx #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BAUD_RATE(115200)
@@ -872,7 +780,6 @@ module top #(
         .busy(show_info_uart_busy)
     );
 
-    // CALC inventory info TX (reuse SHOW format)
     ShowMatrixInfoTx #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
         .BAUD_RATE(115200)
@@ -888,7 +795,6 @@ module top #(
         .busy(calc_info_uart_busy)
     );
 
-    // 请确保你有 MatrixUartTx.v
     MatrixUartTx u_show_matrix (
         .clk(clk),
         .uartTxRstN(rst_n),
@@ -905,7 +811,6 @@ module top #(
 
     wire mode_uart_tx;
 
-    // 请确保你有 ModeUartNotifier.v
     ModeUartNotifier #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ)
     ) u_mode_uart (
@@ -916,9 +821,6 @@ module top #(
         .busy(mode_uart_busy)
     );
 
-    // --------------------
-    // CALC controller (operation type selection only; actual math TBD)
-    // --------------------
     localparam CALC_WAIT_OP      = 3'd0;
     localparam CALC_OP_TRANSPOSE = 3'd1;
     localparam CALC_OP_ADD       = 3'd2;
@@ -928,7 +830,6 @@ module top #(
 
     reg [2:0] calc_state;
 
-    // CALC flow state machine (after op selected)
     localparam CALC_FLOW_IDLE              = 5'd0;
     localparam CALC_FLOW_SEND_INFO         = 5'd1;
     localparam CALC_FLOW_WAIT1_INPUT       = 5'd2;
@@ -952,55 +853,35 @@ module top #(
     localparam CALC_FLOW_CONV_CONFIRM      = 5'd20;
 
     reg [4:0] calc_flow;
-
-    // Timer to wait for storage lookup after setting dims
     reg [1:0] calc_prep_timer;
-
-    // Operand bookkeeping
     reg       calc_need_second;
     reg       calc_is_scalar;
-    reg       calc_operand_idx; // 0 -> first matrix, 1 -> second matrix
-
-    // Input staging for confirm-key workflow
+    reg       calc_operand_idx; 
     reg       calc_m_ready;
     reg [7:0] calc_m_pending;
     reg       calc_n_ready;
     reg [7:0] calc_n_pending;
     reg       calc_id_ready;
     reg [7:0] calc_id_pending;
-    
-    // Convolution input counter
     reg [3:0] conv_input_cnt;
-
-    // Matrix listing/selection cursors
     reg [2:0] calc_list_cursor;
     reg [2:0] calc_sel_cursor;
     reg       calc_seen_matrix_busy;
-
-    // Prompt + matrix TX for CALC
     reg       calc_prompt_start;
     reg [2:0] calc_prompt_sel;
     reg       calc_prompt_req;
     reg [2:0] calc_prompt_req_sel;
-
     reg       calc_send_pulse;
     wire      calc_matrix_tx_busy;
     reg [31:0] calc_matrix_idle_cnt;
-
-    // Two-operand dimension bookkeeping (for compatibility validation)
     reg [7:0] calc_op1_m;
     reg [7:0] calc_op1_n;
     reg [7:0] calc_op2_m;
     reg [7:0] calc_op2_n;
-
-    // Operand matrix latching (tight packed, m*n elements)
     reg [199:0] calc_op1_matrix_tight;
     reg [199:0] calc_op2_matrix_tight;
-
     reg       calc_wait_rand;
     reg       calc_wait_rand_scalar;
-
-    // Result latching for UART output
     reg [CONV_RESULT_WIDTH-1:0] calc_result_matrix_tight;
     reg [7:0]   calc_result_m;
     reg [7:0]   calc_result_n;
@@ -1008,8 +889,6 @@ module top #(
     wire        calc_result_tx_busy;
     reg         calc_seen_result_busy;
     reg [31:0]  calc_result_idle_cnt;
-
-    // Countdown + alert blink for invalid dimension combinations
     reg        calc_countdown_en_r;
     reg [4:0]  calc_countdown_sec_r;
     reg [31:0] calc_countdown_cnt_r;
@@ -1042,16 +921,12 @@ module top #(
         end
     endfunction
 
-    // Scalar input via switches
     wire [3:0] calc_scalar_val;
     reg        rand_scalar_active;
     reg [3:0]  rand_scalar_stored;
-    // Physical switch order is reversed for scalar entry: bit-reverse the 4 LSBs.
-    // If random scalar is active, use stored random value.
     assign calc_scalar_val = rand_scalar_active ? rand_scalar_stored : {mode_sw[0], mode_sw[1], mode_sw[2], mode_sw[3]};
     reg        calc_scalar_disp_en;
 
-    // Fake compute word TX ("calc\n")
     reg       calc_word_req;
     reg       calc_word_active;
     reg [2:0] calc_word_idx;
@@ -1068,7 +943,7 @@ module top #(
                 3'd1: calc_word_char = "a";
                 3'd2: calc_word_char = "l";
                 3'd3: calc_word_char = "c";
-                default: calc_word_char = "\n";
+                default: calc_word_char = "\\n";
             endcase
         end
     endfunction
@@ -1087,15 +962,9 @@ module top #(
 
     wire      calc_op_hold;
     wire [7:0] calc_op_hold_char;
-
-    // 7-seg override trigger for op letter
     reg       calc_op_disp_pulse;
     reg [7:0] calc_op_disp_char;
-
-    // Persistent selected op letter for hold display
     reg [7:0] calc_selected_char;
-
-    // UART TX (single byte) for op letter
     reg       calc_op_tx_start;
     reg [7:0] calc_op_tx_data;
     wire      calc_op_tx_busy;
@@ -1134,7 +1003,6 @@ module top #(
         end
     endfunction
 
-    // Single-byte UART TX instance for CALC op selection
     UartTx #(
         .CLK_FREQ(CLK_FREQ_HZ),
         .BAUD_RATE(115200)
@@ -1147,7 +1015,6 @@ module top #(
         .txBusy(calc_op_tx_busy)
     );
 
-    // CALC prompt TX (reuse existing prompt strings)
     wire calc_prompt_uart_tx;
     wire calc_prompt_uart_busy;
 
@@ -1164,7 +1031,6 @@ module top #(
         .busy(calc_prompt_uart_busy)
     );
 
-    // CALC matrix TX
     wire [199:0] calc_matrix_slice;
     assign calc_matrix_slice = storage_rdata;
 
@@ -1187,9 +1053,6 @@ module top #(
 
     assign calc_matrix_tx_busy = calc_matrix_busy_wire;
 
-    // --------------------
-    // CALC computation (uses Calculation/ units)
-    // --------------------
     function automatic [199:0] tight_to_padded_5x5;
         input [199:0] tight;
         input [2:0] m;
@@ -1266,7 +1129,6 @@ module top #(
     assign calc_op1_padded = tight_to_padded_5x5(calc_op1_matrix_tight, calc_op1_m[2:0], calc_op1_n[2:0]);
     assign calc_op2_padded = tight_to_padded_5x5(calc_op2_matrix_tight, calc_op2_m[2:0], calc_op2_n[2:0]);
 
-    // Add
     wire [199:0] add_out_padded;
     wire add_valid;
     AddUnit u_add (
@@ -1280,7 +1142,6 @@ module top #(
         .valid(add_valid)
     );
 
-    // Scalar multiply
     wire [199:0] scalar_out_padded;
     wire scalar_valid;
     ScalarMultiplyUnit u_scalar (
@@ -1294,7 +1155,6 @@ module top #(
         .valid(scalar_valid)
     );
 
-    // Transpose
     wire [199:0] trans_out_padded;
     wire [2:0]   trans_m;
     wire [2:0]   trans_n;
@@ -1311,7 +1171,6 @@ module top #(
         .valid(trans_valid)
     );
 
-    // Multiply
     wire [199:0] mul_out_padded;
     wire [2:0]   mul_m;
     wire [2:0]   mul_n;
@@ -1331,7 +1190,6 @@ module top #(
         .valid(mul_valid)
     );
 
-    // Convolution
     wire [71:0]  conv_kernel;
     assign conv_kernel = padded_5x5_to_kernel3x3(calc_op1_padded);
     wire [CONV_RESULT_WIDTH-1:0] conv_out_padded;
@@ -1353,7 +1211,6 @@ module top #(
         .cycleCount(conv_cycles)
     );
 
-    // Selected result (padded 5x5) + dims
     reg [CONV_RESULT_WIDTH-1:0] calc_res_padded;
     reg [7:0]   calc_res_m;
     reg [7:0]   calc_res_n;
@@ -1404,7 +1261,6 @@ module top #(
         endcase
     end
 
-    // CALC result matrix TX
     wire calc_result_uart_tx;
     wire calc_result_busy_wire;
     MatrixUartTx #(
@@ -1436,7 +1292,6 @@ module top #(
             calc_op_tx_pending      <= 1'b0;
             calc_op_tx_pending_char <= 8'h00;
 
-            // CALC flow reset
             calc_flow          <= CALC_FLOW_IDLE;
             calc_req_m         <= 8'd1;
             calc_req_n         <= 8'd1;
@@ -1501,7 +1356,6 @@ module top #(
             calc_force_mode_pulse <= 1'b0;
             calc_result_send_pulse <= 1'b0;
 
-            // Alert blink generator (runs only while countdown is active)
             if (mode_state != MODE_CALC) begin
                 alert_blink_cnt   <= 32'd0;
                 alert_blink_bit_r <= 1'b0;
@@ -1517,8 +1371,6 @@ module top #(
                 alert_blink_bit_r <= 1'b0;
             end
 
-            // Countdown timer (10s -> 0s). If time runs out before the user confirms the first
-            // re-entry step, force returning to CAL op selection start (re-show "CAL" for 1s).
             if (mode_state != MODE_CALC) begin
                 calc_countdown_en_r  <= 1'b0;
                 calc_countdown_sec_r <= 5'd0;
@@ -1531,11 +1383,9 @@ module top #(
                     if (calc_countdown_sec_r != 5'd0) begin
                         calc_countdown_sec_r <= calc_countdown_sec_r - 1'b1;
                     end else begin
-                        // timeout at 0
                         calc_countdown_en_r  <= 1'b0;
                         calc_countdown_cnt_r <= 32'd0;
 
-                        // Reset to CAL start (no op selected)
                         calc_state          <= CALC_WAIT_OP;
                         calc_selected_char  <= 8'h00;
                         calc_op_tx_pending  <= 1'b0;
@@ -1552,19 +1402,16 @@ module top #(
                         calc_id_ready       <= 1'b0;
                         calc_prep_timer     <= 2'd0;
 
-                        // Re-show "CAL" for 1 second
                         calc_force_mode_pulse <= 1'b1;
                     end
                 end
             end
 
-            // If we leave CALC mode (currently only via reset), return to selection
             if (mode_state != MODE_CALC) begin
                 calc_state         <= CALC_WAIT_OP;
                 calc_op_tx_pending <= 1'b0;
                 calc_selected_char  <= 8'h00;
 
-                // cancel CALC flow helpers
                 calc_flow          <= CALC_FLOW_IDLE;
                 calc_prompt_req    <= 1'b0;
                 calc_info_req      <= 1'b0;
@@ -1584,12 +1431,10 @@ module top #(
 
                 calc_exit_to_default <= 1'b0;
             end else begin
-                // Default: keep exit request until mode_state consumes it.
                 if (mode_state == MODE_DEFAULT) begin
                     calc_exit_to_default <= 1'b0;
                 end
 
-                // In CALC mode, wait for user to choose an operation via switches and confirm via button
                 if (calc_state == CALC_WAIT_OP) begin
                     if (btn_pulse) begin
                         if ( (mode_sw == 5'b00001) ||
@@ -1602,20 +1447,17 @@ module top #(
                             calc_op_disp_char  <= calc_op_to_char(sw_to_calc_op(mode_sw));
                             calc_op_disp_pulse <= 1'b1;
 
-                            // Latch for continuous display until exit CALC
                             calc_selected_char <= calc_op_to_char(sw_to_calc_op(mode_sw));
 
-                            // Queue UART send of the op letter (single byte)
                             calc_op_tx_pending      <= 1'b1;
                             calc_op_tx_pending_char <= calc_op_to_char(sw_to_calc_op(mode_sw));
 
-                            // Initialize flow after op selection
                             if (sw_to_calc_op(mode_sw) == CALC_OP_CONV) begin
                                 calc_flow        <= CALC_FLOW_CONV_RESET;
                                 conv_input_cnt   <= 4'd0;
                                 calc_op1_m       <= 8'd3;
                                 calc_op1_n       <= 8'd3;
-                                calc_info_req    <= 1'b0; // No info needed
+                                calc_info_req    <= 1'b0; 
                             end else begin
                                 calc_flow        <= CALC_FLOW_SEND_INFO;
                                 calc_info_req    <= 1'b1;
@@ -1642,7 +1484,6 @@ module top #(
                             calc_is_scalar   <= (sw_to_calc_op(mode_sw) == CALC_OP_SCALAR);
                             rand_scalar_active <= 1'b0;
 
-                            // Clear previous operands/results
                             calc_op1_matrix_tight <= {MATRIX_WIDTH{1'b0}};
                             calc_op2_matrix_tight <= {MATRIX_WIDTH{1'b0}};
                             calc_result_matrix_tight <= {MATRIX_WIDTH{1'b0}};
@@ -1653,11 +1494,9 @@ module top #(
                     end
                 end
 
-                // CALC flow FSM (runs after op is chosen)
                 if (calc_state != CALC_WAIT_OP) begin
                     case (calc_flow)
                         CALC_FLOW_IDLE: begin
-                            // Wait here only if op was selected before reset; start flow.
                             calc_flow     <= CALC_FLOW_SEND_INFO;
                             calc_info_req <= 1'b1;
                             calc_info_seen_busy <= 1'b0;
@@ -1668,7 +1507,6 @@ module top #(
                                 calc_info_seen_busy <= 1'b1;
                             end
                             if (calc_info_seen_busy && !calc_info_uart_busy && !calc_info_req) begin
-                                // After inventory -> prompt wait1 for M
                                 calc_prompt_req     <= 1'b1;
                                 calc_prompt_req_sel <= PROMPT_WAIT1;
                                 calc_flow           <= CALC_FLOW_WAIT1_INPUT;
@@ -1686,7 +1524,6 @@ module top #(
                         end
 
                         CALC_FLOW_WAIT1_CONFIRM: begin
-                            // Keep showing wait1 state; confirm via button
                             if (rx_done) begin
                                 if (rx_digit_ok) begin
                                     calc_m_pending <= rx_digit;
@@ -1701,8 +1538,6 @@ module top #(
                                     calc_op2_m <= calc_m_pending;
                                 end
 
-                                // During countdown window, the first confirm counts as "started re-entry".
-                                // Cancel the countdown immediately.
                                 if (calc_countdown_en_r) begin
                                     calc_countdown_en_r  <= 1'b0;
                                     calc_countdown_sec_r <= 5'd0;
@@ -1742,9 +1577,6 @@ module top #(
                                 end
                                 calc_n_ready     <= 1'b0;
 
-                                // For two-operand ops, after we have both dimensions, validate compatibility.
-                                // If invalid: start/restart 10s countdown, blink LEDs continuously,
-                                // and force returning to operand selection start (user can re-enter within countdown).
                                 if (calc_need_second && (calc_operand_idx == 1'b1)) begin
                                     if (!calc_dims_ok(calc_state, calc_op1_m, calc_op1_n, calc_op2_m, calc_n_pending)) begin
                                         calc_countdown_en_r  <= 1'b1;
@@ -1760,7 +1592,6 @@ module top #(
                                         calc_flow        <= CALC_FLOW_WAIT1_INPUT;
                                         calc_prep_timer  <= 2'd0;
                                     end else begin
-                                        // Valid dims -> proceed
                                         calc_prompt_req  <= 1'b1;
                                         calc_prompt_req_sel <= PROMPT_DISPLAY;
                                         calc_flow        <= CALC_FLOW_PREP;
@@ -1770,7 +1601,6 @@ module top #(
                                         calc_countdown_cnt_r <= 32'd0;
                                     end
                                 end else begin
-                                    // Single-operand / first operand path
                                     calc_prompt_req  <= 1'b1;
                                     calc_prompt_req_sel <= PROMPT_DISPLAY;
                                     calc_flow        <= CALC_FLOW_PREP;
@@ -1780,7 +1610,6 @@ module top #(
                         end
 
                         CALC_FLOW_PREP: begin
-                            // Wait a few cycles for matrixIO to settle after setting dims.
                             if (calc_prep_timer < 2'd3) begin
                                 calc_prep_timer <= calc_prep_timer + 1'b1;
                             end else begin
@@ -1798,7 +1627,6 @@ module top #(
                         end
 
                         CALC_FLOW_LIST_ARM: begin
-                            // Send all matrices for this dimension with their IDs
                             if (calc_list_cursor >= storage_count) begin
                                 calc_flow      <= CALC_FLOW_SEL_INPUT;
                                 calc_id_ready  <= 1'b0;
@@ -1822,15 +1650,13 @@ module top #(
                         end
 
                         CALC_FLOW_SEL_INPUT: begin
-                            // User types matrix id (1..5), then confirms with button
                             if (rand_detected) begin
-                                rand_max_val    <= {5'd0, storage_count} - 8'd1; // 0..(count-1)
+                                rand_max_val    <= {5'd0, storage_count} - 8'd1; 
                                 rand_gen_enable <= 1'b1;
                                 calc_wait_rand  <= 1'b1;
                             end else if (calc_wait_rand) begin
                                 rand_gen_enable <= 1'b0;
                                 calc_wait_rand  <= 1'b0;
-                                // Use first byte of random data. Add 1 to get 1..count
                                 calc_id_pending <= rand_data_flat[7:0] + 8'd1;
                                 calc_id_ready   <= 1'b1;
                                 calc_flow       <= CALC_FLOW_SEL_CONFIRM;
@@ -1851,7 +1677,6 @@ module top #(
                                 end
                             end
                             if (btn_pulse && calc_id_ready) begin
-                                // Clamp to existing range; if invalid, stay
                                 if (calc_id_pending >= 8'd1 && calc_id_pending <= storage_count) begin
                                     calc_sel_cursor <= calc_id_pending[2:0] - 3'd1;
                                     calc_id_ready   <= 1'b0;
@@ -1866,7 +1691,6 @@ module top #(
                         CALC_FLOW_SHOW_ONE_ARM: begin
                             if (!calc_matrix_tx_busy && !calc_result_tx_busy && !calc_prompt_req && !mode_uart_busy &&
                                 !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy) begin
-                                // Latch selected operand matrix for computation (tight packed)
                                 if (calc_operand_idx == 1'b0) begin
                                     calc_op1_matrix_tight <= calc_matrix_slice;
                                 end else begin
@@ -1883,11 +1707,9 @@ module top #(
                                 calc_seen_matrix_busy <= 1'b1;
                             end
                             if (calc_seen_matrix_busy && !calc_matrix_tx_busy) begin
-                                // Decide next step based on op
                                 if (calc_is_scalar) begin
                                     calc_flow <= CALC_FLOW_SCALAR_WAIT;
                                 end else if (calc_need_second && (calc_operand_idx == 1'b0)) begin
-                                    // Need second matrix: repeat full dimension selection for operand2
                                     calc_operand_idx <= 1'b1;
                                     calc_m_ready     <= 1'b0;
                                     calc_n_ready     <= 1'b0;
@@ -1903,7 +1725,6 @@ module top #(
                         end
 
                         CALC_FLOW_SCALAR_WAIT: begin
-                            // Live show scalar via 7-seg; confirm button to finalize.
                             calc_scalar_disp_en <= 1'b1;
 
                             if (rand_detected) begin
@@ -1950,7 +1771,6 @@ module top #(
                         end
 
                         CALC_FLOW_COMPUTE_LATCH: begin
-                            // Latch computation results (combinational units) then send over UART.
                             if (calc_res_valid) begin
                                 calc_result_m <= calc_res_m;
                                 calc_result_n <= calc_res_n;
@@ -1965,7 +1785,6 @@ module top #(
                                 if (calc_state == CALC_OP_CONV) begin
                                     calc_compute_start <= 1'b0;
                                 end else begin
-                                    // Unexpected invalid -> restart operand selection
                                     calc_prompt_req     <= 1'b1;
                                     calc_prompt_req_sel <= PROMPT_WAIT1;
                                     calc_operand_idx    <= 1'b0;
@@ -1994,10 +1813,8 @@ module top #(
                         end
 
                         CALC_FLOW_DONE_WAIT_CONFIRM: begin
-                            // Wait user confirmation to return to DEFAULT mode.
                             if (btn_pulse) begin
                                 calc_exit_to_default <= 1'b1;
-                                // Prepare CALC internal state for next entry
                                 calc_state         <= CALC_WAIT_OP;
                                 calc_selected_char <= 8'h00;
                                 calc_op_tx_pending <= 1'b0;
@@ -2019,8 +1836,6 @@ module top #(
                     endcase
                 end
 
-                // Fire the UART TX when bus is available.
-                // Avoid collisions with mode notifier (e.g., freshly entered CALC).
                 if (calc_op_tx_pending && !calc_op_tx_busy && !mode_uart_busy &&
                     !calc_prompt_uart_busy && !calc_info_uart_busy && !calc_matrix_tx_busy && !calc_word_txBusy) begin
                     calc_op_tx_data    <= calc_op_tx_pending_char;
@@ -2028,7 +1843,6 @@ module top #(
                     calc_op_tx_pending <= 1'b0;
                 end
 
-                // Dispatch CALC prompt when UART is clear
                 if (!calc_matrix_tx_busy && !calc_result_tx_busy && !mode_uart_busy && !calc_info_uart_busy && !calc_op_tx_busy && !calc_word_txBusy &&
                     calc_prompt_req && mode_state == MODE_CALC) begin
                     calc_prompt_sel   <= calc_prompt_req_sel;
@@ -2036,14 +1850,12 @@ module top #(
                     calc_prompt_req   <= 1'b0;
                 end
 
-                // Dispatch CALC inventory info when UART is clear
                 if (!calc_matrix_tx_busy && !calc_result_tx_busy && !mode_uart_busy && !calc_prompt_uart_busy && !calc_op_tx_busy && !calc_word_txBusy &&
                     calc_info_req && mode_state == MODE_CALC) begin
                     calc_info_start <= 1'b1;
                     calc_info_req   <= 1'b0;
                 end
 
-                // Fake "calc\n" sender (multi-byte) driven here to avoid multi-driver regs
                 if (mode_state == MODE_CALC) begin
                     if (!calc_word_active) begin
                         if (calc_word_req && !calc_word_txBusy &&
@@ -2061,7 +1873,6 @@ module top #(
                                 calc_word_txData  <= calc_word_char(calc_word_idx + 1'b1);
                                 calc_word_txStart <= 1'b1;
                             end else begin
-                                // idx==4 was last byte (\n)
                                 calc_word_active <= 1'b0;
                                 calc_word_idx    <= 3'd0;
                             end
@@ -2072,9 +1883,6 @@ module top #(
         end
     end
 
-    // --------------------
-    // GEN controller (Random generation + store + UART output)
-    // --------------------
     localparam GEN_IDLE          = 4'd0;
     localparam GEN_ENTRY_WAIT1   = 4'd1;
     localparam GEN_WAIT_M        = 4'd2;
@@ -2100,14 +1908,11 @@ module top #(
     reg       gen_send_pulse;
     reg       gen_seen_matrix_busy;
 
-    // Random generator control
     reg       rand_enable;
     wire [199:0] rand_matrix;
 
-    // Buffer newly generated matrices (up to 5)
     reg [199:0] gen_buf [0:4];
 
-    // GEN TX modules signals
     wire gen_prompt_uart_tx;
     wire gen_prompt_uart_busy;
     wire gen_matrix_uart_tx;
@@ -2116,7 +1921,6 @@ module top #(
 
     assign gen_tx_busy = gen_prompt_uart_busy || gen_matrix_busy_wire;
 
-    // 请确保你有 random.v
     random u_rand (
         .clk(clk),
         .rst(~rst_n),
@@ -2154,8 +1958,6 @@ module top #(
     wire [199:0] gen_matrix_to_send;
     assign gen_matrix_to_send = sel_gen_buf(gen_send_idx);
 
-    // MatrixUartTx reads matrixData continuously while busy; keep its inputs
-    // stable for the entire transmission by latching before sendOne.
     reg [199:0] gen_matrix_latched;
     reg [7:0]   gen_m_latched;
     reg [7:0]   gen_n_latched;
@@ -2175,7 +1977,6 @@ module top #(
         .busy(gen_matrix_busy_wire)
     );
 
-    // GEN controller FSM
     integer gi;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -2209,7 +2010,6 @@ module top #(
             gen_write_req    <= 1'b0;
             rand_enable      <= 1'b0;
 
-            // If we leave GEN mode, cancel pending prompt requests
             if (mode_state != MODE_GEN) begin
                 gen_prompt_req <= 1'b0;
                 gen_seen_matrix_busy <= 1'b0;
@@ -2300,7 +2100,6 @@ module top #(
                     end else begin
                         gen_buf[gen_gen_idx] <= rand_matrix;
 
-                        // Also write to storage
                         gen_write_req   <= 1'b1;
                         gen_write_dimX  <= gen_m;
                         gen_write_dimY  <= gen_n;
@@ -2310,7 +2109,6 @@ module top #(
                             gen_gen_idx <= gen_gen_idx + 1'b1;
                             gen_state   <= GEN_GEN_PULSE;
                         end else begin
-                            // Finished generation; now send "generate" then matrices
                             gen_prompt_req     <= 1'b1;
                             gen_prompt_req_sel <= PROMPT_GENERATE;
                             gen_state          <= GEN_SEND_GENWORD;
@@ -2331,7 +2129,6 @@ module top #(
                     if (mode_state != MODE_GEN) begin
                         gen_state <= GEN_IDLE;
                     end else if (gen_send_idx >= gen_k[2:0]) begin
-                        // Done; restart for next input
                         gen_prompt_req     <= 1'b1;
                         gen_prompt_req_sel <= PROMPT_WAIT1;
                         gen_state          <= GEN_WAIT_M;
@@ -2371,7 +2168,6 @@ module top #(
                 default: gen_state <= GEN_IDLE;
             endcase
 
-            // Dispatch GEN prompt request when UART is clear
             if (!gen_tx_busy && !mode_uart_busy && gen_prompt_req && mode_state == MODE_GEN) begin
                 gen_prompt_sel   <= gen_prompt_req_sel;
                 gen_prompt_start <= 1'b1;
@@ -2380,9 +2176,6 @@ module top #(
         end
     end
 
-    // --------------------
-    // Error pulse generation (drives LED blink via error_blink)
-    // --------------------
     wire err_default_mode_sel;
     wire err_show_dim;
     wire err_calc_op_sel;
@@ -2391,22 +2184,18 @@ module top #(
     wire err_calc_scalar_range;
     wire err_gen_digit;
 
-    // DEFAULT: invalid mode selection (not exactly one of the 5 mode switches).
     assign err_default_mode_sel = (mode_state == MODE_DEFAULT) && btn_pulse && !mode_sw_valid_onehot;
 
-    // SHOW: invalid dimension input (non-ignored char, not in 1..5).
     assign err_show_dim = (mode_state == MODE_SHOW) &&
                           ((show_state == SHOW_WAIT_M) || (show_state == SHOW_WAIT_N)) &&
                           rx_done && !rx_digit_ok && !rx_is_ignore;
 
-    // CALC: invalid op selection (only while waiting for op).
     assign err_calc_op_sel = (mode_state == MODE_CALC) && (calc_state == CALC_WAIT_OP) &&
                              btn_pulse && !mode_sw_valid_onehot;
 
     wire rx_is_rand_char;
     assign rx_is_rand_char = (rx_data == "r") || (rx_data == "a") || (rx_data == "n") || (rx_data == "d");
 
-    // CALC: invalid UART digit during dimension / id entry (non-ignored, not 1..5).
     assign err_calc_uart_digit = (mode_state == MODE_CALC) &&
                                  rx_done && !rx_digit_ok && !rx_is_ignore &&
                                  (
@@ -2416,16 +2205,13 @@ module top #(
                                     (((calc_flow == CALC_FLOW_SEL_INPUT)     || (calc_flow == CALC_FLOW_SEL_CONFIRM)) && !rx_is_rand_char)
                                  );
 
-    // CALC: invalid matrix id confirm (out of current storage_count range).
     assign err_calc_id_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SEL_CONFIRM) &&
                                btn_pulse && calc_id_ready &&
                                !((calc_id_pending >= 8'd1) && (calc_id_pending <= storage_count));
 
-    // CALC: invalid scalar confirm (>9 shows 'E' on 7-seg; confirm should error but not accept).
     assign err_calc_scalar_range = (mode_state == MODE_CALC) && (calc_flow == CALC_FLOW_SCALAR_WAIT) &&
                                    btn_pulse && (calc_scalar_val > 4'd9);
 
-    // GEN: invalid UART digit during M/N/K entry.
     assign err_gen_digit = (mode_state == MODE_GEN) &&
                            ((gen_state == GEN_WAIT_M) || (gen_state == GEN_WAIT_N) || (gen_state == GEN_WAIT_K)) &&
                            rx_done && !rx_is_ignore &&
@@ -2443,7 +2229,6 @@ module top #(
     wire gen_uart_sel_prompt;
     assign gen_uart_sel_prompt = gen_prompt_uart_busy || gen_prompt_start;
 
-          // UART mux
           wire calc_uart_sel_info;
           assign calc_uart_sel_info = calc_info_uart_busy || calc_info_start;
 
@@ -2459,7 +2244,8 @@ module top #(
                 wire calc_uart_sel_result;
                 assign calc_uart_sel_result = calc_result_tx_busy || calc_result_send_pulse;
 
-          assign uart_tx = (mode_state == MODE_SHOW)
+          assign uart_tx = mode_uart_busy ? mode_uart_tx :
+                           (mode_state == MODE_SHOW)
                                      ? (show_uart_sel_info ? show_info_uart_tx
                                          : (show_uart_sel_prompt ? prompt_uart_tx : matrix_uart_tx))
                    : (mode_state == MODE_GEN)
@@ -2472,7 +2258,7 @@ module top #(
                                  : (calc_uart_sel_word ? calc_word_uart_tx
                                      : (calc_uart_sel_op ? calc_op_uart_tx
                                          : (calc_uart_sel_result ? calc_result_uart_tx
-                                             : (calc_matrix_tx_busy ? calc_matrix_uart_tx : mode_uart_tx))))))
+                                             : calc_matrix_uart_tx)))))
                    : mode_uart_tx;
 
 endmodule
