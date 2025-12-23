@@ -85,9 +85,9 @@ module ModeUartNotifier #(
 
     // --- 2. 信号声明 ---
 
-    reg  [2:0] mode_state_d; // 上一拍模式，用于检测边沿
-    reg        pending_req;  // 有待发送的请求
-    reg  [2:0] pending_mode; // 待发送模式
+    reg  [2:0] mode_state_d; // 上一拍模式，用于�?测边�?
+    reg        pending_req;  // 有待发�?�的请求
+    reg  [2:0] pending_mode; // 待发送模�?
     
     // FSM Signals
     reg  [1:0] state;
@@ -111,7 +111,7 @@ module ModeUartNotifier #(
 
     assign busy = (state != ST_IDLE) || pending_req || in_reset_guard;
 
-    // --- 3. 边缘检测逻辑 ---
+    // --- 3. 边缘�?测�?�辑 ---
     
     // Queue a send whenever mode changes; also queue DEFAULT after reset release
     // with a short idle guard to avoid mid-frame reset producing garbage bytes.
@@ -140,7 +140,7 @@ module ModeUartNotifier #(
                     pending_req  <= 1'b1;
                     pending_mode <= mode_state;
                 end
-                // 状态机在空闲态接收请求后，握手清除请求
+                // 状�?�机在空闲�?�接收请求后，握手清除请�?
                 else if (state == ST_IDLE && pending_req) begin
                     pending_req <= 1'b0;
                 end
@@ -148,7 +148,7 @@ module ModeUartNotifier #(
         end
     end
 
-    // --- 4. 状态机逻辑 (发送控制器) ---
+    // --- 4. 状�?�机逻辑 (发�?�控制器) ---
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -171,7 +171,7 @@ module ModeUartNotifier #(
                 end
 
                 ST_LOAD: begin
-                    // 先装载数据，下一拍再拉 txStart，确保 UartTx 采样到正确的 txData
+                    // 先装载数据，下一拍再�? txStart，确�? UartTx 采样到正确的 txData
                     if (!txBusy) begin
                         txData <= mode_msg_char(send_mode, send_idx);
                         state  <= ST_KICK;
@@ -180,21 +180,21 @@ module ModeUartNotifier #(
 
                 ST_KICK: begin
                     if (!txBusy) begin
-                        txStart <= 1'b1; // txData 已经稳定一拍
+                        txStart <= 1'b1; // txData 已经稳定�?�?
                         state   <= ST_WAIT;
                     end
                 end
 
                 ST_WAIT: begin
                     if (!txBusy) begin
-                        if (send_idx + 1'b1 < mode_msg_len(send_mode)) begin
+                        if (send_idx < mode_msg_len(send_mode)) begin
                             send_idx <= send_idx + 1'b1;
                             state    <= ST_LOAD;
                         end else begin
                             state <= ST_IDLE;
                         end
                     end else begin
-                        state <= ST_WAIT; // 等待发送完成
+                        state <= ST_WAIT; // 等待发�?�完�?
                     end
                 end
 
@@ -203,7 +203,7 @@ module ModeUartNotifier #(
         end
     end
 
-    // --- 5. 模块实例化 ---
+    // --- 5. 模块实例�? ---
 
     UartTx #(
         .CLK_FREQ(CLK_FREQ_HZ),

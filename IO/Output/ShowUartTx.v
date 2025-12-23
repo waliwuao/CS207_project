@@ -167,7 +167,7 @@ module ShowUartTx #(
 
                 ST_WAIT: begin
                     if (!txBusy) begin
-                        if (prompt_idx + 1'b1 < prompt_len(active_prompt)) begin
+                        if (prompt_idx < prompt_len(active_prompt)) begin
                             prompt_idx <= prompt_idx + 1'b1;
                             state      <= ST_LOAD;
                         end else begin
